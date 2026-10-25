@@ -56,7 +56,7 @@ const cls = (x) => x > 0 ? 'up' : x < 0 ? 'dn' : '';
 const ftime = (t) => { if (!t) return '–'; const d = new Date(t); const p = (n) => String(n).padStart(2, '0'); return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
 const unit = () => 'USDT';
 const isPhone = () => matchMedia('(max-width: 760px)').matches;   // 폰: 차트 누르기로 가격 넣지 않음, 키보드 안 띄움
-const CHART_TIP = () => isPhone() ? '가격은 주문창 왼쪽 호가를 눌러 넣어요' : '차트를 누르면 그 가격이 주문창에 들어가요';
+const CHART_TIP = () => isPhone() ? '가격은 주문창 왼쪽 호가를 눌러 넣어요' : '가격은 호가창을 눌러 넣어요';
 const futPx = (q) => q.mark > 0 ? q.mark : q.last > 0 ? q.last : (q.bid > 0 && q.ask > 0 ? (q.bid + q.ask) / 2 : undefined);
 const pxOf = (mkt, s) => mkt === 'fut' ? futPx(P.fut[s]) : P.spot[s].last;
 const prices = () => ({ spot: Object.fromEntries(SYMS.map((s) => [s, P.spot[s].last])), fut: Object.fromEntries(SYMS.map((s) => [s, futPx(P.fut[s])])) });
@@ -495,8 +495,7 @@ function mountChart() {
       if (Math.abs(t - ui.drawA[0]) < ivSec(cfg.myIv)) { toast('같은 봉이에요 — 다른 봉을 눌러 주세요'); return; }
       addDrawing({ k: 't', a: ui.drawA, b: [t, px] }); ui.draw = null; ui.drawA = null; renderChartBar(); return;
     }
-    if (!readOnly() && !isPhone()) setPriceField(px);
-  });
+  });      // 차트를 눌러 가격 넣기는 없앰 (사용자 요청 2026-10-25) — 가격은 호가창으로만
   loadBars();
 }
 const BIV = { 15: '15m', 60: '1h', 240: '4h', D: '1d' };
