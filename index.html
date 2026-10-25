@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>트레이딩 데스크</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* 레이아웃: 위 = 계좌·종목 띠, 가운데 = 차트 | 호가 | 주문 (좁으면 세로로), 아래 = 탭 (포지션·주문·체결·일지·통계·브리핑·봇) */
+:root{
+  --bg:#f4f5f7;--panel:#ffffff;--panel2:#eef0f3;--line:#dfe3e8;--fg:#141820;--mute:#687280;
+  --up:#d33a43;--dn:#1d6fe0;--upbg:rgba(211,58,67,.10);--dnbg:rgba(29,111,224,.10);--accent:#a86f00;--accbg:rgba(168,111,0,.10);
+  --ok:#1f8a4c;--warn:#b26a00;
+  --ui:"IBM Plex Sans KR","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;
+  --num:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0e1115;--panel:#151920;--panel2:#1b2028;--line:#262d37;--fg:#e4e7eb;--mute:#8b94a1;
+  --up:#f2555e;--dn:#4a90ff;--upbg:rgba(242,85,94,.13);--dnbg:rgba(74,144,255,.13);--accent:#f0b43c;--accbg:rgba(240,180,60,.12);
+  --ok:#3fbf75;--warn:#e9a23b;color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0e1115;--panel:#151920;--panel2:#1b2028;--line:#262d37;--fg:#e4e7eb;--mute:#8b94a1;
+  --up:#f2555e;--dn:#4a90ff;--upbg:rgba(242,85,94,.13);--dnbg:rgba(74,144,255,.13);--accent:#f0b43c;--accbg:rgba(240,180,60,.12);
+  --ok:#3fbf75;--warn:#e9a23b;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 var(--ui)}
+body{padding-left:max(10px,env(safe-area-inset-left,0px));padding-right:max(10px,env(safe-area-inset-right,0px));padding-block:8px 40px}
+button,input,select,textarea{font:inherit;color:inherit}
+.num{font-family:var(--num);font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.up{color:var(--up)}.dn{color:var(--dn)}.mute{color:var(--mute)}.acc{color:var(--accent)}
+.wrap{max-width:1500px;margin:0 auto;display:flex;flex-direction:column;gap:8px}
+.bar{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 12px}
+.brand{font-weight:600;letter-spacing:.02em;display:flex;align-items:center;gap:8px}
+.brand i{width:10px;height:10px;border-radius:2px;background:var(--accent);display:inline-block;transform:rotate(45deg)}
+.seg{display:inline-flex;background:var(--panel2);border-radius:6px;padding:2px;gap:2px}
+.seg button{border:0;background:none;padding:5px 11px;border-radius:5px;cursor:pointer;color:var(--mute)}
+.seg button.on{background:var(--panel);color:var(--fg);box-shadow:0 0 0 1px var(--line)}
+.kv{display:flex;flex-direction:column;line-height:1.2}.kv small{color:var(--mute);font-size:11px}.kv b{font-weight:500}
+.grow{flex:1}
+.sync{font-size:12px;color:var(--mute);display:flex;align-items:center;gap:6px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--mute);display:inline-block}.dot.ok{background:var(--ok)}.dot.bad{background:var(--up)}.dot.wait{background:var(--warn)}
+.chips{display:flex;gap:6px;overflow-x:auto;scrollbar-width:thin;padding-bottom:2px}
+.chip{border:1px solid var(--line);background:var(--panel);border-radius:6px;padding:5px 10px;cursor:pointer;display:flex;gap:8px;align-items:baseline;white-space:nowrap}
+.chip.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.chip b{font-weight:600}.chip .num{font-size:12px}
+.main{display:grid;grid-template-columns:minmax(0,1fr) 250px 310px;gap:8px}
+.pane{background:var(--panel);border:1px solid var(--line);border-radius:8px;min-width:0}
+#tvwrap{height:560px;overflow:hidden}
+#tv{height:100%}
+.hd{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);font-size:12px;color:var(--mute)}
+.ob{font-size:12px}
+.ob table{width:100%;border-collapse:collapse}
+.ob td{padding:2px 8px;position:relative}
+.ob td:last-child{text-align:right}
+.ob .bar-a,.ob .bar-b{position:absolute;right:0;top:1px;bottom:1px;z-index:0}
+.ob .bar-a{background:var(--dnbg)}.ob .bar-b{background:var(--upbg)}
+.ob span{position:relative;z-index:1}
+.ob .mid{text-align:center;padding:8px;font-size:18px;border-block:1px solid var(--line)}
+.form{padding:10px;display:flex;flex-direction:column;gap:9px}
+.row{display:flex;gap:6px;align-items:center}
+.lbl{font-size:12px;color:var(--mute)}
+.field{display:flex;align-items:center;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:0 8px;min-width:0}
+.field input,.field select{border:0;background:none;padding:7px 0;width:100%;outline:none;min-width:0;text-align:right}
+.field select{text-align:left}
+.field span{color:var(--mute);font-size:12px;white-space:nowrap;padding-left:6px}
+.field:focus-within{border-color:var(--accent)}
+.pcts{display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
+.pcts button{border:1px solid var(--line);background:none;border-radius:5px;padding:4px 0;font-size:12px;cursor:pointer;color:var(--mute)}
+.pcts button:hover{color:var(--fg);border-color:var(--mute)}
+.lev{display:flex;gap:8px;align-items:center}.lev input[type=range]{flex:1;accent-color:var(--accent)}
+.big{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.btn{border:0;border-radius:6px;padding:10px 0;font-weight:600;cursor:pointer;color:#fff}
+.btn.buy{background:var(--up)}.btn.sell{background:var(--dn)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn2{border:1px solid var(--line);background:var(--panel);border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px}
+.btn2:hover{border-color:var(--mute)}
+.btn2.danger{color:var(--up);border-color:var(--upbg)}
+.calc{font-size:12px;display:grid;grid-template-columns:auto 1fr;gap:3px 10px;background:var(--panel2);border-radius:6px;padding:8px}
+.calc span:nth-child(even){text-align:right}
+details.jr{border:1px dashed var(--line);border-radius:6px;padding:6px 8px}
+details.jr summary{cursor:pointer;font-size:12px;color:var(--accent)}
+details.jr .jrin{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+textarea{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:6px 8px;resize:vertical;min-height:52px}
+.note{font-size:12px;color:var(--mute)}
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);padding:0 6px;overflow-x:auto}
+.tabs button{border:0;background:none;padding:10px 12px;cursor:pointer;color:var(--mute);border-bottom:2px solid transparent;white-space:nowrap}
+.tabs button.on{color:var(--fg);border-bottom-color:var(--accent)}
+.tabs button .cnt{font-size:11px;background:var(--panel2);border-radius:8px;padding:0 6px;margin-left:4px}
+.tbody{padding:10px;overflow-x:auto}
+table.t{width:100%;border-collapse:collapse;font-size:13px}
+table.t th{font-weight:500;color:var(--mute);font-size:12px;text-align:right;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+table.t td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+table.t th.l,table.t td.l{text-align:left}
+table.t td.wrap2{white-space:normal;min-width:180px;max-width:420px;text-align:left}
+.pill{display:inline-block;font-size:11px;border-radius:4px;padding:1px 6px;background:var(--panel2);color:var(--mute)}
+.pill.long{background:var(--upbg);color:var(--up)}.pill.short{background:var(--dnbg);color:var(--dn)}.pill.acc{background:var(--accbg);color:var(--accent)}
+.empty{padding:24px;text-align:center;color:var(--mute)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:12px}
+.card{background:var(--panel2);border-radius:8px;padding:10px 12px}.card small{color:var(--mute);font-size:12px;display:block}.card b{font-size:20px;font-weight:500}
+.prog{height:6px;background:var(--panel2);border-radius:3px;overflow:hidden}.prog i{display:block;height:100%;background:var(--accent)}
+.md{max-width:760px;line-height:1.65}.md h1,.md h2,.md h3{line-height:1.3;text-wrap:balance}.md h1{font-size:20px}.md h2{font-size:17px}.md h3{font-size:15px}
+.md code{font-family:var(--num);background:var(--panel2);padding:1px 4px;border-radius:3px}
+.md table{border-collapse:collapse}.md td,.md th{border:1px solid var(--line);padding:4px 8px}
+.brief{display:grid;grid-template-columns:220px minmax(0,1fr);gap:16px}
+.blist button{display:block;width:100%;text-align:left;border:0;background:none;padding:8px;border-radius:6px;cursor:pointer;color:var(--mute)}
+.blist button.on{background:var(--panel2);color:var(--fg)}
+.toast{position:fixed;right:max(16px,env(safe-area-inset-right,0px));bottom:calc(16px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:6px;z-index:50;max-width:min(380px,calc(100vw - 32px))}
+.toast div{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:6px;padding:9px 12px;box-shadow:0 6px 24px rgba(0,0,0,.18);font-size:13px}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:60;padding:16px}
+.modal>div{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;max-width:520px;width:100%;display:flex;flex-direction:column;gap:10px;max-height:90vh;overflow:auto}
+.ro{background:var(--accbg);color:var(--accent);border-radius:6px;padding:8px 10px;font-size:12px}
+.set{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+.set section{display:flex;flex-direction:column;gap:8px}
+.set h3{margin:0;font-size:14px}
+canvas{max-width:100%}
+:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+@media (max-width:1100px){.main{grid-template-columns:minmax(0,1fr) 300px}.obpane{display:none}}
+@media (max-width:760px){.main{grid-template-columns:1fr}#tvwrap{height:380px}.brief{grid-template-columns:1fr}.hide-s{display:none}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="bar">
+    <div class="brand"><i></i>트레이딩 데스크</div>
+    <div class="seg" id="acctSeg" role="tablist" aria-label="계좌">
+      <button data-acct="me" class="on">내 계좌</button>
+      <button data-acct="claude">Claude 계좌</button>
+    </div>
+    <div class="kv"><small>현물 평가 (원)</small><b class="num" id="eqSpot">–</b></div>
+    <div class="kv"><small>선물 평가 (USDT)</small><b class="num" id="eqFut">–</b></div>
+    <div class="kv hide-s"><small>BTC 필터 (50일선)</small><b id="btcF">–</b></div>
+    <div class="grow"></div>
+    <div class="sync" id="syncStat"><span class="dot"></span><span>로컬 저장</span></div>
+    <div class="sync" id="feedStat"><span class="dot wait"></span><span>시세 연결 중</span></div>
+  </div>
+
+  <div class="bar" style="padding:6px 8px">
+    <div class="seg" id="mktSeg"><button data-mkt="spot" class="on">현물 KRW · 업비트</button><button data-mkt="fut">선물 USDT · 바이낸스</button></div>
+    <div class="chips grow" id="chips"></div>
+  </div>
+
+  <div class="main">
+    <div class="pane" id="tvwrap"><div id="tv"></div></div>
+    <div class="pane obpane">
+      <div class="hd"><span>호가</span><span id="obSym"></span></div>
+      <div class="ob" id="ob"></div>
+    </div>
+    <div class="pane" id="formPane"></div>
+  </div>
+
+  <div class="pane">
+    <div class="tabs" id="tabs"></div>
+    <div class="tbody" id="tabBody"></div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+<div id="modalRoot"></div>
+<script src="https://s3.tradingview.com/tv.js"></script>
+<script src="engine.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
