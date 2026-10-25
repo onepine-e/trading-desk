@@ -28,13 +28,14 @@ function migrateMe(m) {
       trades: (m.trades || []).filter((x) => x.mkt === 'fut'), fills: (m.fills || []).filter((x) => x.mkt === 'fut'), orders: (m.orders || []).filter((x) => x.mkt === 'fut'),
       seen: Object.fromEntries(Object.entries(m.seen || {}).filter(([k]) => k.startsWith('fut:'))), migrated: Date.now() });
     n.init.usdt = m.init?.usdt ?? n.init.usdt;
+    n.updated = m.updated || 0;      // 다른 기기가 이미 옮긴 기록이 저장소에 있으면 그쪽이 이기도록
     migratedNote = true;
-  }
+  } else n.updated = 0;              // 이 기기에 기록이 없으면 저장소 기록이 이기도록 (새 기기에서 빈 계좌로 덮어쓰지 않게)
   return n;
 }
 let ME = migrateMe(LS.get('desk.me', null));
 let ME_SHA = LS.get('desk.me.sha', null);
-let CL = null, BRIEFS = [], BRIEF_TXT = {}, BOT = null;
+let CL = null, BRIEFS = [], BRIEF_TXT = {}, BOT = null, MKT = null;
 const ui = { acct: 'me', mkt: 'spot', sym: 'BTC', tab: 'pos', side: 'buy', otype: 'market', lev: 10, statMkt: 'fut', brief: null };
 const P = { spot: {}, fut: {} };
 for (const s of SYMS) { P.spot[s] = {}; P.fut[s] = {}; }
@@ -133,7 +134,8 @@ async function pullRemote() {
   if (!ghOn()) return;
   try {
     const r = await ghJSON('desk/me.json');
-    if (r.data && (r.data.updated || 0) > (ME.updated || 0)) { ME = r.data; LS.set('desk.me', ME); toast('저장소에 더 최근 기록이 있어 불러왔어요'); }
+    if (r.data && (r.data.updated || 0) > (ME.updated || 0)) { ME = migrateMe(r.data); LS.set('desk.me', ME); toast('저장소에 더 최근 기록이 있어 불러왔어요'); }
+    if (ME.migrated && !(r.data?.schema >= E.SCHEMA)) save();      // 이 기기에서 옮긴 계좌를 저장소에도
     ME_SHA = r.sha; LS.set('desk.me.sha', ME_SHA);
     setSync('ok', '저장소와 맞춤');
   } catch (e) { setSync('bad', `저장소 읽기 실패 (${e.message})`); }
@@ -142,6 +144,7 @@ async function loadShared() {
   if (!ghOn()) return;
   try { CL = (await ghJSON('desk/claude/state.json')).data; } catch { /* 아직 없음 */ }
   try { BRIEFS = (await ghJSON('desk/briefings/index.json')).data || []; } catch { BRIEFS = []; }
+  try { MKT = (await ghJSON('desk/market.json')).data; } catch { MKT = null; }
   try { BOT = await loadBot(); } catch { BOT = null; }
   renderTabs(); renderTop(); if (readOnly()) renderForm();
 }
@@ -610,7 +613,7 @@ async function submit(side) {
 }
 
 // ───────────────────────────── 아래 탭
-const TABS = [['pos', '포지션'], ['ord', '대기 주문'], ['fill', '체결'], ['jr', '매매 일지'], ['stat', '통계'], ['brief', '브리핑'], ['bot', '봇 계좌'], ['set', '설정']];
+const TABS = [['pos', '포지션'], ['ord', '대기 주문'], ['fill', '체결'], ['jr', '매매 일지'], ['stat', '통계'], ['brief', '시황'], ['bot', '봇 계좌'], ['set', '설정']];
 function renderTabs() {
   const st = view();
   const cnt = { pos: st ? Object.keys(st.spot.hold).length + Object.keys(st.fut.pos).length : 0, ord: st ? st.orders.filter((o) => o.status === 'open').length : 0, brief: BRIEFS.length };
@@ -757,27 +760,32 @@ function drawCum(cv, pnls, mk) {
 }
 function md(t) {
   const lines = String(t).replace(/\r/g, '').split('\n'); let out = '', inT = false, inL = false;
-  const inl = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`(.+?)`/g, '<code>$1</code>');
+  const inl = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`(.+?)`/g, '<code>$1</code>')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
   for (const l of lines) {
-    if (/^\|/.test(l)) { if (/^\|[\s:|-]+\|$/.test(l)) continue; if (!inT) { out += '<table>'; inT = true; } out += '<tr>' + l.split('|').slice(1, -1).map((c) => `<td>${inl(c.trim())}</td>`).join('') + '</tr>'; continue; }
-    if (inT) { out += '</table>'; inT = false; }
+    if (/^\|/.test(l)) { if (/^\|[\s:|-]+\|$/.test(l)) continue; if (!inT) { out += '<div class="tw"><table>'; inT = true; } out += '<tr>' + l.split('|').slice(1, -1).map((c) => `<td>${inl(c.trim())}</td>`).join('') + '</tr>'; continue; }
+    if (inT) { out += '</table></div>'; inT = false; }
     if (/^\s*[-*] /.test(l)) { if (!inL) { out += '<ul>'; inL = true; } out += `<li>${inl(l.replace(/^\s*[-*] /, ''))}</li>`; continue; }
     if (inL) { out += '</ul>'; inL = false; }
     const m = l.match(/^(#{1,3}) (.*)/);
     if (m) out += `<h${m[1].length}>${inl(m[2])}</h${m[1].length}>`; else if (l.trim()) out += `<p>${inl(l)}</p>`;
   }
-  return out + (inT ? '</table>' : '') + (inL ? '</ul>' : '');
+  return out + (inT ? '</table></div>' : '') + (inL ? '</ul>' : '');
 }
 async function tabBrief(body) {
-  if (!ghOn()) { body.innerHTML = '<div class="empty">브리핑은 GitHub 저장소(desk/briefings)에서 읽어요. 설정에서 GitHub 를 연결해 주세요.</div>'; return; }
-  if (!BRIEFS.length) { body.innerHTML = '<div class="empty">아직 브리핑이 없어요. Claude 브리핑 예약 작업이 켜지면 하루 3번 여기에 쌓여요.</div>'; return; }
+  if (!ghOn()) { body.innerHTML = '<div class="empty">시황은 GitHub 저장소(desk/market.json · desk/briefings)에서 읽어요. 설정에서 GitHub 를 연결해 주세요.</div>'; return; }
+  const num = MKT?.brief_md ? { id: 'num', t: MKT.t, title: '숫자 시황 (4시간마다 자동)', num: true } : null;
   const list = BRIEFS.slice().sort((a, b) => b.t - a.t);
-  ui.brief = ui.brief || list[0].id;
-  const cur = list.find((x) => x.id === ui.brief) || list[0];
-  body.innerHTML = `<div class="brief"><div class="blist">${list.slice(0, 40).map((x) => `<button data-b="${x.id}" class="${x.id === cur.id ? 'on' : ''}"><div class="num" style="font-size:12px">${ftime(x.t)}</div>${esc(x.title || '')}</button>`).join('')}</div><div class="md" id="briefMd">불러오는 중…</div></div>`;
+  if (!num && !list.length) { body.innerHTML = '<div class="empty">아직 시황이 없어요. 숫자 시황은 가상매매 봇이 다음에 돌 때(4시간마다), 글 브리핑은 하루 두 번(09:20 · 21:20) 여기에 쌓여요.</div>'; return; }
+  const all = (num ? [num] : []).concat(list);
+  ui.brief = ui.brief && all.some((x) => x.id === ui.brief) ? ui.brief : (list[0] || num).id;
+  const cur = all.find((x) => x.id === ui.brief);
+  const kindTxt = (x) => x.num ? '' : x.kind === 'evening' ? '저녁 · ' : x.kind === 'morning' ? '아침 · ' : '';
+  body.innerHTML = `<div class="brief"><div class="blist">${all.slice(0, 41).map((x) => `<button data-b="${esc(x.id)}" class="${x.id === cur.id ? 'on' : ''}${x.num ? ' bnum' : ''}"><div class="num" style="font-size:12px">${kindTxt(x)}${ftime(x.t)}</div>${esc(x.title || '')}</button>`).join('')}</div><div class="md" id="briefMd">불러오는 중…</div></div>`;
   $$('[data-b]', body).forEach((b) => b.onclick = () => { ui.brief = b.dataset.b; renderTabBody(); });
+  if (cur.num) { $('#briefMd').innerHTML = md(MKT.brief_md); return; }
   if (!BRIEF_TXT[cur.id]) BRIEF_TXT[cur.id] = await ghText(cur.path).catch(() => '불러오지 못했어요');
-  if ($('#briefMd')) $('#briefMd').innerHTML = md(BRIEF_TXT[cur.id]);
+  if ($('#briefMd')) $('#briefMd').innerHTML = md(BRIEF_TXT[cur.id] || '불러오지 못했어요');
 }
 function tabBot(body) {
   if (!ghOn()) { body.innerHTML = '<div class="empty">가상매매 봇(tsb7-paper) 기록을 읽으려면 설정에서 GitHub 를 연결해 주세요.</div>'; return; }
