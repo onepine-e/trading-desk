@@ -109,38 +109,73 @@ async function ghPut(path, data, sha, msg) {
 }
 function setSync(state, text) { const s = $('#syncStat'); s.querySelector('.dot').className = 'dot ' + state; s.querySelector('span:last-child').textContent = text; }
 
-let saveTimer = null, saving = false;
+// 기기 사이 동기화: 저장소의 me.json 이 기준. 열려 있는 동안 20초마다(화면에 보일 때) + 다시 볼 때 확인해서 다른 기기의 거래를 받아 옴.
+// '중요한 내용'(잔고·포지션·주문·체결·거래·리셋·내 선·셋업)만 비교 — 마지막으로 맞춘 내용(BASE)과 견줘 누가 바꿨는지 판단:
+//   저장소만 바뀜 → 받아 옴 · 이 기기만 바뀜 → 올림 · 둘 다 바뀜(드묾) → 저장소 쪽을 받고 이 기기 것은 따로 보관 + 알림
+let saveTimer = null, saving = false, lastPull = 0;
+const msig = (m) => m ? JSON.stringify([m.init, m.spot, m.fut, m.orders, m.fills, m.trades, m.resets || [], m.draw || {}, m.setups]) : '';
+let BASE_SIG = LS.get('desk.me.basesig', null);
+const setBase = (sig) => { BASE_SIG = sig; LS.set('desk.me.basesig', sig); };
 function save() {
   ME.updated = now();
   LS.set('desk.me', ME);
   if (!ghOn()) { setSync('', '이 기기에만 저장'); return; }
   setSync('wait', '저장 대기');
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(pushRemote, 3000);
+  saveTimer = setTimeout(pushRemote, 1500);
+}
+function adoptRemote(r, why) {
+  ME = migrateMe(r.data); ME_SHA = r.sha;
+  LS.set('desk.me', ME); LS.set('desk.me.sha', ME_SHA); setBase(msig(ME));
+  if (why) toast(why, 8000);
+  renderAll(); drawLines(); paintDrawings(); if (ui.page !== 'trade') renderPage();
+}
+function conflict(r) {
+  LS.set('desk.me.conflict', { t: now(), me: ME });
+  adoptRemote(r, '두 기기에서 거의 동시에 기록이 바뀌어 저장소 쪽으로 맞췄어요. 방금 이 기기에서 한 동작이 안 보이면 다시 해 주세요. (이 기기 기록은 따로 보관해 뒀어요)');
 }
 async function pushRemote() {
-  if (saving) { saveTimer = setTimeout(pushRemote, 2000); return; }
+  saveTimer = null;
+  if (saving) { saveTimer = setTimeout(pushRemote, 1500); return; }
   saving = true;
   try {
+    const mine = msig(ME);
     try { ME_SHA = await ghPut('desk/me.json', ME, ME_SHA, `desk: 내 계좌 ${new Date().toISOString()}`); }
     catch (e) {
-      if (e.status === 409 || e.status === 422) { const cur = await ghJSON('desk/me.json'); ME_SHA = await ghPut('desk/me.json', ME, cur.sha, 'desk: 내 계좌 (덮어씀)'); }
-      else throw e;
+      if (e.status !== 409 && e.status !== 422) throw e;
+      const cur = await ghJSON('desk/me.json'), rs = msig(cur.data && migrateMe(cur.data));
+      if (cur.data && rs !== BASE_SIG && rs !== mine) {          // 저장소도 중요한 내용이 바뀜
+        if (mine === BASE_SIG) adoptRemote(cur, '다른 기기의 거래를 불러왔어요'); else conflict(cur);
+        saving = false; setSync('ok', `저장소와 맞춤 ${ftime(now())}`); return;
+      }
+      ME_SHA = await ghPut('desk/me.json', ME, cur.sha, `desk: 내 계좌 ${new Date().toISOString()}`);
     }
-    LS.set('desk.me.sha', ME_SHA);
+    LS.set('desk.me.sha', ME_SHA); setBase(mine); lastPull = now();
     setSync('ok', `저장됨 ${ftime(now())}`);
   } catch (e) { setSync('bad', `저장 실패 (${e.message}) — 이 기기에는 저장됨`); }
   saving = false;
 }
-async function pullRemote() {
-  if (!ghOn()) return;
+async function pullRemote(quiet) {
+  if (!ghOn() || saving || saveTimer) return;
   try {
     const r = await ghJSON('desk/me.json');
-    if (r.data && (r.data.updated || 0) > (ME.updated || 0)) { ME = migrateMe(r.data); LS.set('desk.me', ME); toast('저장소에 더 최근 기록이 있어 불러왔어요'); }
+    lastPull = now();
+    if (saving || saveTimer) return;      // 확인하는 사이 이 기기에서 저장이 시작됨
+    if (!r.data) { if (msig(ME) !== BASE_SIG) save(); setSync('ok', '저장소 준비'); return; }
+    if (r.sha !== ME_SHA) {
+      const rs = msig(migrateMe(r.data)), mine = msig(ME);
+      if (rs === mine) { ME_SHA = r.sha; LS.set('desk.me.sha', ME_SHA); setBase(rs); }
+      else if (BASE_SIG == null) {        // 이 기기에서 처음 맞춤: 더 최근 쪽
+        if ((r.data.updated || 0) > (ME.updated || 0)) adoptRemote(r, quiet ? '' : '저장소 기록을 불러왔어요');
+        else { ME_SHA = r.sha; save(); }
+      }
+      else if (mine === BASE_SIG) adoptRemote(r, quiet ? '다른 기기의 거래를 불러왔어요' : '');
+      else if (rs === BASE_SIG) { ME_SHA = r.sha; save(); }   // 이 기기만 바뀜 → 올림
+      else conflict(r);
+    }
     if (ME.migrated && !(r.data?.schema >= E.SCHEMA)) save();      // 이 기기에서 옮긴 계좌를 저장소에도
-    ME_SHA = r.sha; LS.set('desk.me.sha', ME_SHA);
-    setSync('ok', '저장소와 맞춤');
-  } catch (e) { setSync('bad', `저장소 읽기 실패 (${e.message})`); }
+    setSync('ok', `저장소와 맞춤 ${ftime(now())}`);
+  } catch (e) { if (!quiet) setSync('bad', `저장소 읽기 실패 (${e.message})`); }
 }
 async function loadShared() {
   if (!ghOn()) return;
@@ -326,8 +361,8 @@ async function catchUpAll() {
     for (const s of Object.keys(ME.fut.pos)) await fundingCatchUp(s);
     for (const mkt of ['spot', 'fut']) for (const s of SYMS) ME.seen[`${mkt}:${s}`] = Math.floor(t / FIVE) * FIVE;
     caughtUp = true; catchFail = false;
-    if (ev.length) { toast(`<b>화면을 닫아 둔 동안 ${ev.length}건 체결</b> (캔들 ${n}개 확인)<br>` + ev.slice(0, 6).map(fillMsg).join('<br>'), 12000); liqHint(ev); }
-    save();
+    if (ev.length) { toast(`<b>화면을 닫아 둔 동안 ${ev.length}건 체결</b> (캔들 ${n}개 확인)<br>` + ev.slice(0, 6).map(fillMsg).join('<br>'), 12000); liqHint(ev); save(); }
+    else LS.set('desk.me', ME);      // 체결 없으면 저장소에 쓰지 않음 (다른 기기 기록을 건드리지 않게)
   } catch (e) {
     caughtUp = true; catchFail = true;
     toast(`놓친 구간 확인이 잠시 실패했어요 (${esc(e.message)}) — 1분 뒤 다시 확인해요. 그동안 실시간 체결은 그대로 반영돼요.`, 7000);
@@ -1111,7 +1146,7 @@ function acctSeries(st, hist, livePx) {     // 합계(현물+선물) 평가액 �
   return { init, pts: pts.filter((p) => isFinite(p.t) && isFinite(p.v)).sort((a, b) => a.t - b.t), eq };
 }
 function recordEq() {     // 내 계좌 하루 한 줄 (그날 안에서는 마지막 값으로 덮어씀, 날이 바뀔 때만 저장소에 저장)
-  if (!caughtUp) return;
+  if (!caughtUp || document.visibilityState !== 'visible' || (ghOn() && now() - lastPull > 60000)) return;   // 오래 안 맞춘 기기는 쓰지 않음
   const px = prices();
   for (const s of Object.keys(ME.spot.hold)) if (!(px.spot[s] > 0)) return;
   for (const s of Object.keys(ME.fut.pos)) if (!(px.fut[s] > 0)) return;
@@ -1195,7 +1230,8 @@ function bind() {
   matchMedia('(max-width: 760px)').addEventListener?.('change', () => { paintOB(); renderChartBar(); });
   $$('#pnav button').forEach((b) => b.onclick = () => { const p = b.dataset.page; if (p === ui.page) return; history.pushState(null, '', p === 'trade' ? location.pathname + location.search : '#' + p); setPage(p); });
   window.addEventListener('popstate', () => setPage(location.hash.slice(1) || 'trade'));
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && caughtUp) { caughtUp = false; catchUpAll(); } });
+  document.addEventListener('visibilitychange', async () => { if (document.visibilityState === 'visible') { await pullRemote(true); if (caughtUp) { caughtUp = false; catchUpAll(); } } });
+  setInterval(() => { if (document.visibilityState === 'visible') pullRemote(true); }, 20000);
 }
 async function start() {
   applyTheme(); bind(); renderAll(); mountChart(); setPage(location.hash.slice(1) || 'trade');
