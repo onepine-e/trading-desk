@@ -84,12 +84,14 @@
     if (!h || h.qty <= 0) {
       tr = openTrade(st, 'spot', sym, 'long', t, price, meta);
       h = st.spot.hold[sym] = { qty: 0, avg: 0, sl: meta.sl ?? null, tp: meta.tp ?? null, tradeId: tr.id, opened: t };
-      if (meta.sl) tr.risk = krw * Math.max(0, (price - meta.sl) / price);
     } else {
       tr = trOf(st, h.tradeId);
       if (meta.sl != null) h.sl = meta.sl;
       if (meta.tp != null) h.tp = meta.tp;
     }
+    // 위험액(R 의 분모) = 이번에 산 금액 × (진입가 − 손절가)/진입가 + 사고팔 때 수수료. 추가 매수도 더함 (선물과 같은 정의)
+    const sl = meta.sl ?? h.sl;
+    if (tr && sl != null && sl < price) { tr.risk = (tr.risk || 0) + krw * (price - sl) / price + krw * fee * 2; if (tr.sl0 == null) tr.sl0 = sl; }
     h.avg = (h.avg * h.qty + krw) / (h.qty + qty);       // 평균 단가 = 수수료 포함 원가
     h.qty = r8(h.qty + qty);
     st.spot.cash -= krw;
@@ -164,11 +166,12 @@
     const rel = p.margin * frac;
     const pnl = p.side === 'long' ? qty * (price - p.entry) : qty * (p.entry - price);
     const feeAmt = qty * price * fee;
-    st.fut.wallet += Math.max(0, rel + pnl - feeAmt);
+    const realized = Math.max(-rel, pnl - feeAmt);      // 격리: 그 몫의 증거금보다 더 잃을 수 없음 → 지갑 변화와 일지 손익을 똑같이
+    st.fut.wallet += rel + realized;
     p.qty -= qty; p.margin -= rel;
     const tr = trOf(st, p.tradeId);
-    if (tr) { tr.pnl += pnl - feeAmt; tr.fees += feeAmt; }
-    const f = addFill(st, { t, mkt: 'fut', sym, side: p.side === 'long' ? '롱 청산' : '숏 청산', price, qty, amount: rel, fee: feeAmt, pnl: pnl - feeAmt, reason, tradeId: p.tradeId });
+    if (tr) { tr.pnl += realized; tr.fees += feeAmt; }
+    const f = addFill(st, { t, mkt: 'fut', sym, side: p.side === 'long' ? '롱 청산' : '숏 청산', price, qty, amount: rel, fee: feeAmt, pnl: realized, reason, tradeId: p.tradeId });
     if (p.qty <= 1e-12 || frac >= 0.999999) {
       if (tr) closeTrade(st, tr, t, price);
       delete st.fut.pos[sym];
@@ -245,36 +248,37 @@
     return r;
   }
 
-  // 캔들 하나 처리 (실시간 틱도 o=h=l=c 캔들로 넣음). c = {t (캔들 시작 ms), o, h, l, c, end (끝 ms)}
+  // 캔들 하나 처리 (실시간 틱도 o=h=l=c 캔들로 넣음). c = {t (캔들 시작 ms), o, h, l, c, mh?, ml? (마크 가격 고가·저가 — 선물 강제청산 판정용, 없으면 h·l)}
+  // 순서: ① 이미 있던 포지션 — 시가에서 이미 정해지는 것(갭) 먼저, 그다음 캔들 안에서는 불리한 쪽(손절·청산) 먼저
+  //       ② 대기 주문 체결 → 같은 캔들 안에서 새 포지션의 손절·청산도 확인 (보수적으로: 체결 뒤 저가/고가에 닿았다고 봄, 익절은 다음 캔들부터)
+  function guardFut(st, sym, c, full) {
+    const p = st.fut.pos[sym]; if (!p) return null;
+    const L = p.side === 'long', liq = liqPrice(p), mh = c.mh ?? c.h, ml = c.ml ?? c.l;
+    const slOk = p.sl != null && (L ? p.sl > liq : p.sl < liq);       // 손절이 청산가보다 먼저 오는 위치일 때만 손절이 의미 있음
+    if (full) {   // 시가 갭
+      if (slOk && (L ? c.o <= p.sl : c.o >= p.sl)) return (L ? c.o <= liq : c.o >= liq) ? futLiquidate(st, sym, liq, c.t) : futClose(st, sym, p.qty, c.o, c.t, '손절 (갭)', FEE.futTaker).fill;
+      if (p.tp != null && (L ? c.o >= p.tp : c.o <= p.tp)) return futClose(st, sym, p.qty, c.o, c.t, '익절 (갭)', FEE.futTaker).fill;
+    }
+    if (slOk && (L ? c.l <= p.sl : c.h >= p.sl)) return futClose(st, sym, p.qty, p.sl, c.t, '손절', FEE.futTaker).fill;
+    if (L ? ml <= liq : mh >= liq) return futLiquidate(st, sym, liq, c.t);
+    if (full && p.tp != null && (L ? c.h >= p.tp : c.l <= p.tp)) return futClose(st, sym, p.qty, p.tp, c.t, '익절', FEE.futMaker).fill;
+    return null;
+  }
+  function guardSpot(st, sym, c, full) {
+    const h = st.spot.hold[sym]; if (!h) return null;
+    if (full) {
+      if (h.sl != null && c.o <= h.sl) return spotSell(st, sym, h.qty, c.o, c.t, '손절 (갭)').fill;
+      if (h.tp != null && c.o >= h.tp) return spotSell(st, sym, h.qty, c.o, c.t, '익절 (갭)').fill;
+    }
+    if (h.sl != null && c.l <= h.sl) return spotSell(st, sym, h.qty, h.sl, c.t, '손절').fill;
+    if (full && h.tp != null && c.h >= h.tp) return spotSell(st, sym, h.qty, h.tp, c.t, '익절').fill;
+    return null;
+  }
   function processCandle(st, mkt, sym, c) {
-    const ev = [];
-    const t = c.t;
-    // ① 보유 포지션: 손절·익절·청산 (가격이 먼저 닿는 쪽: 시가 갭 → 그 다음 손절 우선)
-    if (mkt === 'fut' && st.fut.pos[sym] && t >= st.fut.pos[sym].opened) {   // 진입한 뒤 시작한 캔들만
-      const p = st.fut.pos[sym], liq = liqPrice(p);
-      const L = p.side === 'long';
-      const hitDown = (lv) => lv != null && c.l <= lv, hitUp = (lv) => lv != null && c.h >= lv;
-      const adverse = L ? [p.sl, liq] : [p.sl, liq];
-      const advHit = L ? (lv) => hitDown(lv) : (lv) => hitUp(lv);
-      const favHit = L ? (lv) => hitUp(lv) : (lv) => hitDown(lv);
-      const slFirst = p.sl != null && (L ? p.sl > liq : p.sl < liq);
-      if (slFirst && advHit(p.sl)) {
-        const gapPx = L ? Math.min(p.sl, c.o) : Math.max(p.sl, c.o);
-        if (L ? gapPx <= liq : gapPx >= liq) ev.push(futLiquidate(st, sym, liq, t));
-        else ev.push(futClose(st, sym, p.qty, gapPx, t, '손절', FEE.futTaker).fill);
-      } else if (advHit(liq)) {
-        ev.push(futLiquidate(st, sym, liq, t));
-      } else if (p.tp != null && favHit(p.tp)) {
-        const px = L ? Math.max(p.tp, c.o) : Math.min(p.tp, c.o);
-        ev.push(futClose(st, sym, p.qty, px, t, '익절', FEE.futMaker).fill);
-      }
-      void adverse;
-    }
-    if (mkt === 'spot' && st.spot.hold[sym] && t >= (st.spot.hold[sym].opened ?? 0)) {
-      const h = st.spot.hold[sym];
-      if (h.sl != null && c.l <= h.sl) ev.push(spotSell(st, sym, h.qty, Math.min(h.sl, c.o), t, '손절').fill);
-      else if (h.tp != null && c.h >= h.tp) ev.push(spotSell(st, sym, h.qty, Math.max(h.tp, c.o), t, '익절').fill);
-    }
+    const ev = [], t = c.t;
+    // ① 이 캔들이 시작되기 전부터 있던 포지션
+    if (mkt === 'fut' && st.fut.pos[sym] && t >= st.fut.pos[sym].opened) ev.push(guardFut(st, sym, c, true));
+    if (mkt === 'spot' && st.spot.hold[sym] && t >= (st.spot.hold[sym].opened ?? 0)) ev.push(guardSpot(st, sym, c, true));
     // ② 대기 주문 (만든 시각 이후 시작한 캔들부터)
     for (const o of st.orders) {
       if (o.status !== 'open' || o.mkt !== mkt || o.sym !== sym) continue;
@@ -290,26 +294,33 @@
         if (buyish && c.h >= o.price) px = Math.max(o.price, c.o);
         if (!buyish && c.l <= o.price) px = Math.min(o.price, c.o);
       }
-      if (px != null) {
-        const r = execOrder(st, o, px, t);
-        if (r.ok) ev.push(r.fill);
-      }
+      if (px == null) continue;
+      const had = mkt === 'fut' ? !!st.fut.pos[sym] : !!st.spot.hold[sym];
+      const r = execOrder(st, o, px, t);
+      if (!r.ok) continue;
+      ev.push(r.fill);
+      // 체결된 캔들 안에서 새로/늘어난 포지션의 손절·청산 (틱이면 o=h=l=c 라 영향 없음). 시가 체결(시장가)이면 캔들 전체가 진입 뒤라 익절도 확인
+      const atOpen = px === c.o;
+      if (!o.reduce && (mkt === 'fut' ? st.fut.pos[sym] : st.spot.hold[sym])) ev.push(mkt === 'fut' ? guardFut(st, sym, c, atOpen && !had) : guardSpot(st, sym, c, atOpen && !had));
     }
     return ev.filter(Boolean);
   }
 
   // 놓친 구간 처리: candles = {spot: {BTC: [...]}, fut: {BTC: [...]}} 각 캔들 {t,o,h,l,c}; 시간 순으로 섞어서 처리
-  function catchUp(st, candles, upto) {
+  // funding = {BTC: [{t, rate, mark}]} — 그 시각의 포지션으로 정산되도록 캔들과 같은 시간축에서 처리 (같은 시각이면 펀딩 먼저)
+  function catchUp(st, candles, upto, funding = {}) {
     const all = [];
     for (const mkt of ['spot', 'fut']) {
       for (const [sym, arr] of Object.entries(candles[mkt] || {})) {
         const from = st.seen[`${mkt}:${sym}`] ?? 0;
-        for (const c of arr) if (c.t >= from && (!upto || c.t < upto)) all.push([c.t, mkt, sym, c]);
+        for (const c of arr) if (c.t >= from && (!upto || c.t < upto)) all.push([c.t, 1, mkt, sym, c]);
       }
     }
-    all.sort((a, b) => a[0] - b[0] || (a[1] < b[1] ? -1 : 1));
+    for (const [sym, arr] of Object.entries(funding)) for (const f of arr) if (!upto || f.t < upto) all.push([f.t, 0, 'fund', sym, f]);
+    all.sort((a, b) => a[0] - b[0] || a[1] - b[1] || (a[2] < b[2] ? -1 : 1));
     const ev = [];
-    for (const [, mkt, sym, c] of all) {
+    for (const [, , mkt, sym, c] of all) {
+      if (mkt === 'fund') { const a = applyFunding(st, sym, c.t, c.rate, c.mark); if (a) ev.push({ t: c.t, mkt: 'fut', sym, side: '펀딩', price: c.mark, qty: 0, amount: a, fee: 0, pnl: a, reason: '펀딩비', funding: true }); continue; }
       ev.push(...processCandle(st, mkt, sym, c));
       st.seen[`${mkt}:${sym}`] = c.t + (c.dur || 0);
     }
@@ -325,6 +336,7 @@
     if (!p || t < p.opened) return null;
     const amt = p.qty * price * rate * (p.side === 'long' ? -1 : 1);
     st.fut.wallet += amt;
+    if (st.fut.wallet < 0) { p.margin += st.fut.wallet; st.fut.wallet = 0; }   // 가용 잔고가 모자라면 포지션 증거금에서 (청산가가 가까워짐)
     const tr = trOf(st, p.tradeId);
     if (tr) tr.pnl += amt;
     st.funding.push({ t, sym, rate, amount: amt });

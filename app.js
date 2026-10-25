@@ -129,33 +129,55 @@ const meGet = async () => { await ensureMeBranch(); return ghJSON('desk/me.json'
 const mePut = async (sha, msg) => { await ensureMeBranch(); return ghPut('desk/me.json', ME, sha, msg, ME_BR()); };
 function setSync(state, text) { const s = $('#syncStat'); s.querySelector('.dot').className = 'dot ' + state; s.querySelector('span:last-child').textContent = text; }
 
-// 기기 사이 동기화: 저장소의 me.json 이 기준. 열려 있는 동안 20초마다(화면에 보일 때) + 다시 볼 때 확인해서 다른 기기의 거래를 받아 옴.
-// '중요한 내용'(잔고·포지션·주문·체결·거래·리셋·내 선·셋업)만 비교 — 마지막으로 맞춘 내용(BASE)과 견줘 누가 바꿨는지 판단:
-//   저장소만 바뀜 → 받아 옴 · 이 기기만 바뀜 → 올림 · 둘 다 바뀜(드묾) → 저장소 쪽을 받고 이 기기 것은 따로 보관 + 알림
-let saveTimer = null, saving = false, lastPull = 0;
+// 기기 사이 동기화 — 저장소(desk-me 브랜치)의 me.json 이 기준.
+//  · 이 기기에서 바꾼 게 있으면 '저장 안 됨(dirty)' 표시를 켜 두고, 저장소에 올라갈 때까지 계속 다시 시도 (끊겼다 연결되면 바로)
+//  · 이 기기에 저장 안 된 변경이 없을 때 저장소가 바뀌어 있으면 → 저장소 것을 그대로 받음 (일별 자산 기록은 양쪽 합침)
+//  · 처음 연결하는 기기는 저장소에 기록이 있으면 무조건 저장소 것을 받음 (이 기기 기록은 보관함으로) — 기기 시각으로 판단하지 않음
+//  · 둘 다 바뀐 경우(드묾): 저장소 것을 받고 이 기기 것은 보관함(최근 10개)에 — 설정 탭에서 보기·내려받기·되살리기
+let saveTimer = null, saving = false, lastPull = 0, retryMs = 15000;
+let dirty = !!LS.get('desk.me.dirty', false);
 const msig = (m) => m ? JSON.stringify([m.init, m.spot, m.fut, m.orders, m.fills, m.trades, m.resets || [], m.draw || {}, m.setups]) : '';
+const hasData = (m) => !!m && (m.fills.length || m.trades.length || m.orders.length || (m.resets || []).length || Object.keys(m.fut.pos).length || Object.keys(m.spot.hold).length);
 let BASE_SIG = LS.get('desk.me.basesig', null);
 const setBase = (sig) => { BASE_SIG = sig; LS.set('desk.me.basesig', sig); };
+const setDirty = (v) => { dirty = v; LS.set('desk.me.dirty', v); };
+function backup(m, why) {
+  if (!hasData(m)) return;
+  const B = LS.get('desk.me.backups', []);
+  B.push({ t: now(), why, me: m }); while (B.length > 10) B.shift();
+  LS.set('desk.me.backups', B);
+}
+function mergeEqHist(a = [], b = []) {     // 날짜별로 합침: 같은 날은 늦게 기록된 값 + 그날 최저·최고
+  const M = new Map();
+  for (const r of [...a, ...b]) {
+    const x = M.get(r.day);
+    if (!x) { M.set(r.day, { ...r }); continue; }
+    const y = r.t > x.t ? { ...r } : { ...x };
+    const lo = Math.min(x.lo ?? x.spot + x.fut, r.lo ?? r.spot + r.fut), hi = Math.max(x.hi ?? x.spot + x.fut, r.hi ?? r.spot + r.fut);
+    M.set(r.day, { ...y, lo, hi });
+  }
+  return [...M.values()].sort((p, q) => p.t - q.t);
+}
 function save() {
   ME.updated = now();
-  LS.set('desk.me', ME);
+  LS.set('desk.me', ME); setDirty(true);
   if (!ghOn()) { setSync('', '이 기기에만 저장'); return; }
   setSync('wait', '저장 대기');
   clearTimeout(saveTimer);
   saveTimer = setTimeout(pushRemote, 1500);
 }
 function adoptRemote(r, why) {
+  const seen = ME.seen, eq = ME.eqHist;
   ME = migrateMe(r.data); ME_SHA = r.sha;
-  LS.set('desk.me', ME); LS.set('desk.me.sha', ME_SHA); setBase(msig(ME));
-  if (why) toast(why, 8000);
+  ME.eqHist = mergeEqHist(ME.eqHist, eq);
+  ME.seen = { ...(ME.seen || {}), ...(seen || {}) };      // 어디까지 확인했는지는 기기마다
+  LS.set('desk.me', ME); LS.set('desk.me.sha', ME_SHA); setBase(msig(ME)); setDirty(false);
+  if (why) toast(why, 9000);
   renderAll(); drawLines(); paintDrawings(); if (ui.page !== 'trade') renderPage();
-}
-function conflict(r) {
-  LS.set('desk.me.conflict', { t: now(), me: ME });
-  adoptRemote(r, '두 기기에서 거의 동시에 기록이 바뀌어 저장소 쪽으로 맞췄어요. 방금 이 기기에서 한 동작이 안 보이면 다시 해 주세요. (이 기기 기록은 따로 보관해 뒀어요)');
 }
 async function pushRemote() {
   saveTimer = null;
+  if (!ghOn()) return;
   if (saving) { saveTimer = setTimeout(pushRemote, 1500); return; }
   saving = true;
   try {
@@ -163,40 +185,46 @@ async function pushRemote() {
     try { ME_SHA = await mePut(ME_SHA, `desk: 내 계좌 ${new Date().toISOString()}`); }
     catch (e) {
       if (e.status !== 409 && e.status !== 422) throw e;
-      const cur = await meGet(), rs = msig(cur.data && migrateMe(cur.data));
-      if (cur.data && rs !== BASE_SIG && rs !== mine) {          // 저장소도 중요한 내용이 바뀜
-        if (mine === BASE_SIG) adoptRemote(cur, '다른 기기의 거래를 불러왔어요'); else conflict(cur);
+      const cur = await meGet(), rs = cur.data ? msig(migrateMe(cur.data)) : '';
+      if (cur.data && rs !== BASE_SIG && rs !== mine) {          // 저장소의 중요한 내용도 바뀜 → 둘 다 바뀜
+        backup(ME, '두 기기에서 동시에 바뀜');
+        adoptRemote(cur, '두 기기에서 거의 동시에 기록이 바뀌어 저장소 쪽으로 맞췄어요. 이 기기 기록은 설정 → 보관함에 있어요 (되살리기 가능).');
         saving = false; setSync('ok', `저장소와 맞춤 ${ftime(now())}`); return;
       }
+      if (cur.data) ME.eqHist = mergeEqHist(ME.eqHist, migrateMe(cur.data).eqHist);   // 저장소 쪽 일별 기록도 살림
       ME_SHA = await mePut(cur.sha, `desk: 내 계좌 ${new Date().toISOString()}`);
     }
-    LS.set('desk.me.sha', ME_SHA); setBase(mine); lastPull = now();
-    setSync('ok', `저장됨 ${ftime(now())}`);
-  } catch (e) { setSync('bad', `저장 실패 (${e.message}) — 이 기기에는 저장됨`); }
+    LS.set('desk.me.sha', ME_SHA); setBase(mine); lastPull = now(); retryMs = 15000;
+    if (msig(ME) === mine) setDirty(false); else { saveTimer = setTimeout(pushRemote, 1500); }   // 올리는 사이 또 바뀌었으면 한 번 더
+    setSync(dirty ? 'wait' : 'ok', dirty ? '저장 대기' : `저장됨 ${ftime(now())}`);
+  } catch (e) {
+    setSync('bad', `저장 안 됨 (${e.message}) — ${Math.round(retryMs / 1000)}초 뒤 다시 시도 · 이 기기에는 있음`);
+    clearTimeout(saveTimer); saveTimer = setTimeout(pushRemote, retryMs); retryMs = Math.min(retryMs * 2, 120000);
+  }
   saving = false;
 }
 async function pullRemote(quiet) {
   if (!ghOn() || saving || saveTimer) return;
+  if (dirty) { pushRemote(); return; }                 // 이 기기에 저장 안 된 변경이 먼저
   try {
     const r = await meGet();
     lastPull = now();
-    if (saving || saveTimer) return;      // 확인하는 사이 이 기기에서 저장이 시작됨
-    if (!r.data) { if (msig(ME) !== BASE_SIG) save(); setSync('ok', '저장소 준비'); return; }
-    if (r.sha !== ME_SHA) {
-      const rs = msig(migrateMe(r.data)), mine = msig(ME);
-      if (rs === mine) { ME_SHA = r.sha; LS.set('desk.me.sha', ME_SHA); setBase(rs); }
-      else if (BASE_SIG == null) {        // 이 기기에서 처음 맞춤: 더 최근 쪽
-        if ((r.data.updated || 0) > (ME.updated || 0)) adoptRemote(r, quiet ? '' : '저장소 기록을 불러왔어요');
-        else { ME_SHA = r.sha; save(); }
-      }
-      else if (mine === BASE_SIG) adoptRemote(r, quiet ? '다른 기기의 거래를 불러왔어요' : '');
-      else if (rs === BASE_SIG) { ME_SHA = r.sha; save(); }   // 이 기기만 바뀜 → 올림
-      else conflict(r);
+    if (saving || saveTimer || dirty) return;
+    if (!r.data) { if (hasData(ME)) save(); else setSync('ok', '저장소 준비'); return; }
+    if (BASE_SIG == null) {                               // 이 기기의 첫 연결: 저장소 기록이 있으면 저장소 우선
+      if (hasData(r.data) || !hasData(ME)) {
+        if (hasData(ME) && msig(ME) !== msig(migrateMe(r.data))) backup(ME, '처음 연결할 때 이 기기에 있던 기록');
+        adoptRemote(r, hasData(ME) && !quiet ? '저장소의 계좌 기록을 불러왔어요 (이 기기에 있던 기록은 설정 → 보관함)' : '');
+      } else { ME_SHA = r.sha; save(); }                  // 저장소는 비어 있고 이 기기에 기록 → 올림
+    } else if (r.sha !== ME_SHA) {
+      const changed = msig(migrateMe(r.data)) !== msig(ME);
+      adoptRemote(r, changed && quiet ? '다른 기기의 거래를 불러왔어요' : '');
     }
-    if (ME.migrated && !(r.data?.schema >= E.SCHEMA)) save();      // 이 기기에서 옮긴 계좌를 저장소에도
+    if (ME.migrated && !(r.data?.schema >= E.SCHEMA)) save();
     setSync('ok', `저장소와 맞춤 ${ftime(now())}`);
   } catch (e) { if (!quiet) setSync('bad', `저장소 읽기 실패 (${e.message})`); }
 }
+window.addEventListener('online', () => { if (dirty) pushRemote(); else pullRemote(true); });
 async function loadShared() {
   if (!ghOn()) return;
   try { CL = (await ghJSON('desk/claude/state.json')).data; } catch { /* 아직 없음 */ }
@@ -234,9 +262,9 @@ function onTick(mkt, s, px) {
   const k = mkt + s, t = now();
   if (tickGate[k] && t - tickGate[k] < 800) return;
   tickGate[k] = t;
-  if (!caughtUp) return;
+  if (!caughtUp || document.visibilityState !== 'visible') return;     // 안 보이는 기기는 체결하지 않음 (다시 볼 때 캔들로 확인) → 두 기기가 같은 주문을 겹쳐 체결하지 않게
   const ev = E.processCandle(ME, mkt, s, { t, o: px, h: px, l: px, c: px });
-  if (!catchFail) ME.seen[`${mkt}:${s}`] = Math.floor(t / FIVE) * FIVE;
+  if (!catchFail) ME.seen[`${mkt}:${s}`] = Math.floor(t / 60000) * 60000;
   if (ev.length) { for (const f of ev) toast(fillMsg(f)); save(); renderForm(); renderTabs(); liqHint(ev); }
 }
 function liqHint(ev) {     // 강제청산 뒤 지갑이 바닥이면 리셋 안내
@@ -294,10 +322,7 @@ const lastFundT = {}, lastFundR = {};
 let markSeenWS = 0, restFutOk = null;
 function handleMark(s, mark, T, r) {
   if (!(mark > 0) || !P.fut[s]) return;
-  if (lastFundT[s] && T > lastFundT[s] && caughtUp && ME.fut.pos[s]) {      // 펀딩 시각이 지남 → 직전 비율로 정산
-    const amt = E.applyFunding(ME, s, lastFundT[s], lastFundR[s], mark);
-    if (amt) { toast(`${s} 펀딩비 <span class="num ${cls(amt)}">${fsign(amt, 'fut')} USDT</span> (비율 ${fpct(lastFundR[s], 4)})`); save(); }
-  }
+  if (lastFundT[s] && T > lastFundT[s] && caughtUp && ME.fut.pos[s]) setTimeout(() => syncFunding(s), 20000);      // 펀딩 시각이 지남 → 실제 정산 내역으로
   if (T) { lastFundT[s] = T; lastFundR[s] = r; }
   Object.assign(P.fut[s], { mark, funding: r, nextFunding: T || P.fut[s].nextFunding });
   onTick('fut', s, mark); paintTick('fut', s);
@@ -348,9 +373,10 @@ function binanceWS(delay = 1000) {
 
 // ───────────────────────────── 놓친 구간 (화면을 닫아 둔 동안)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-async function binanceCandles(s, from, iv, spot) {
-  const out = []; let start = from - (iv === '5m' ? FIVE : 3600000);
-  const lim = spot ? 1000 : 1500, base = spot ? 'https://api.binance.com/api/v3/klines' : 'https://fapi.binance.com/fapi/v1/klines';
+const IV_MS = { '1m': 60000, '5m': FIVE, '1h': 3600000 };
+async function binanceCandles(s, from, iv, spot, mark) {     // mark = 선물 마크 가격 캔들 (강제청산 판정용)
+  const out = []; let start = from - IV_MS[iv];
+  const lim = spot ? 1000 : 1500, base = spot ? 'https://api.binance.com/api/v3/klines' : `https://fapi.binance.com/fapi/v1/${mark ? 'markPriceKlines' : 'klines'}`;
   for (let k = 0; k < 40; k++) {
     const r = await fetch(`${base}?symbol=${s}USDT&interval=${iv}&startTime=${start}&limit=${lim}`);
     if (!r.ok) throw new Error('바이낸스 ' + r.status);
@@ -362,27 +388,40 @@ async function binanceCandles(s, from, iv, spot) {
   }
   return out.filter((c) => c.t + c.dur > from);
 }
+async function fundingHist(s, from) {      // 실제 정산된 펀딩 (시각·비율·마크 가격)
+  const r = await fetch(`https://fapi.binance.com/fapi/v1/fundingRate?symbol=${s}USDT&startTime=${from + 1}&limit=1000`);
+  if (!r.ok) throw new Error('바이낸스 펀딩 ' + r.status);
+  return (await r.json()).map((x) => ({ t: x.fundingTime, rate: +x.fundingRate, mark: +x.markPrice || null }));
+}
+// 놓친 구간: 12시간 안쪽은 1분봉, 5일 안쪽은 5분봉, 그 너머 1시간봉. 선물은 마크 가격 캔들(청산 판정)과 펀딩 내역을 같은 시간축에 넣음
 async function catchUpAll() {
   const t = now(), need = { spot: new Set(), fut: new Set() };
   for (const o of ME.orders) if (o.status === 'open') need[o.mkt].add(o.sym);
   for (const s of Object.keys(ME.spot.hold)) need.spot.add(s);
   for (const s of Object.keys(ME.fut.pos)) need.fut.add(s);
-  const candles = { spot: {}, fut: {} };
+  const candles = { spot: {}, fut: {} }, funding = {};
   let n = 0;
   try {
     for (const mkt of ['spot', 'fut']) for (const s of need[mkt]) {
       const from = ME.seen[`${mkt}:${s}`] || ME.updated || t;
       if (t - from < 60000) continue;
-      const days = (t - from) / 864e5;
-      candles[mkt][s] = await binanceCandles(s, from, days > 5 ? '1h' : '5m', mkt === 'spot');
-      n += candles[mkt][s].length;
+      const hrs = (t - from) / 36e5, iv = hrs <= 12 ? '1m' : hrs <= 120 ? '5m' : '1h';
+      const cs = await binanceCandles(s, from, iv, mkt === 'spot');
+      if (mkt === 'fut') {
+        const mk = await binanceCandles(s, from, iv, false, true).catch(() => []), M = new Map(mk.map((x) => [x.t, x]));
+        for (const c of cs) { const m = M.get(c.t); if (m) { c.mh = m.h; c.ml = m.l; } }
+        if (ME.fut.pos[s]) funding[s] = (await fundingHist(s, Math.max(ME.lastFunding[s] || 0, ME.fut.pos[s].opened))).filter((f) => f.t <= t);
+      }
+      candles[mkt][s] = cs; n += cs.length;
     }
-    const ev = E.catchUp(ME, candles, t);
-    for (const s of Object.keys(ME.fut.pos)) await fundingCatchUp(s);
-    for (const mkt of ['spot', 'fut']) for (const s of SYMS) ME.seen[`${mkt}:${s}`] = Math.floor(t / FIVE) * FIVE;
+    const ev = E.catchUp(ME, candles, t, funding);
+    for (const mkt of ['spot', 'fut']) for (const s of SYMS) ME.seen[`${mkt}:${s}`] = Math.max(ME.seen[`${mkt}:${s}`] || 0, Math.floor(t / 60000) * 60000);
     caughtUp = true; catchFail = false;
-    if (ev.length) { toast(`<b>화면을 닫아 둔 동안 ${ev.length}건 체결</b> (캔들 ${n}개 확인)<br>` + ev.slice(0, 6).map(fillMsg).join('<br>'), 12000); liqHint(ev); save(); }
-    else LS.set('desk.me', ME);      // 체결 없으면 저장소에 쓰지 않음 (다른 기기 기록을 건드리지 않게)
+    if (ev.length) {
+      const fills = ev.filter((f) => !f.funding), fund = ev.filter((f) => f.funding);
+      toast(`<b>화면을 닫아 둔 동안${fills.length ? ` ${fills.length}건 체결` : ''}${fund.length ? ` · 펀딩 ${fund.length}회 (${fsign(fund.reduce((a, f) => a + f.amount, 0))} USDT)` : ''}</b> (캔들 ${n}개 확인)<br>` + fills.slice(0, 6).map(fillMsg).join('<br>'), 12000);
+      liqHint(fills); save();
+    } else LS.set('desk.me', ME);      // 바뀐 게 없으면 저장소에 쓰지 않음
   } catch (e) {
     caughtUp = true; catchFail = true;
     toast(`놓친 구간 확인이 잠시 실패했어요 (${esc(e.message)}) — 1분 뒤 다시 확인해요. 그동안 실시간 체결은 그대로 반영돼요.`, 7000);
@@ -390,12 +429,14 @@ async function catchUpAll() {
   }
   renderTabs(); renderForm();
 }
-async function fundingCatchUp(s) {
+// 실시간 펀딩: 정산 시각이 지나면 잠시 뒤 실제 정산 내역(비율·마크 가격)으로 반영
+async function syncFunding(s) {
   const p = ME.fut.pos[s]; if (!p) return;
-  const from = Math.max(ME.lastFunding[s] || 0, p.opened) + 1;
-  const r = await fetch(`https://fapi.binance.com/fapi/v1/fundingRate?symbol=${s}USDT&startTime=${from}&limit=1000`);
-  if (!r.ok) return;
-  for (const x of await r.json()) E.applyFunding(ME, s, x.fundingTime, +x.fundingRate, +x.markPrice || p.entry);
+  try {
+    const fs = (await fundingHist(s, Math.max(ME.lastFunding[s] || 0, p.opened))).filter((f) => f.t <= now());
+    let sum = 0; for (const f of fs) { const a = E.applyFunding(ME, s, f.t, f.rate, f.mark || p.entry); if (a) sum += a; }
+    if (fs.length && sum) { toast(`${s} 펀딩비 <span class="num ${cls(sum)}">${fsign(sum)} USDT</span>`); save(); renderTop(); renderTabs(); }
+  } catch { /* 다음 확인 때 (catchUpAll) */ }
 }
 async function loadBtcFilter() {     // BTC 4시간봉 종가 > 직전 300봉(50일) 평균 (바이낸스 현물 BTCUSDT, 마감된 봉만)
   try {
@@ -411,8 +452,16 @@ async function loadBtcFilter() {     // BTC 4시간봉 종가 > 직전 300봉(50
 }
 
 // ───────────────────────────── 차트
-function mountTV() {
-  const box = $('#tv'); box.innerHTML = '';
+let tvLoading = null;
+function loadTV() {       // 트레이딩뷰 스크립트는 이 보기를 고를 때만 불러옴 (계속 켜 두는 외부 스크립트 줄이기)
+  if (typeof TradingView !== 'undefined') return Promise.resolve();
+  return tvLoading ||= new Promise((res, rej) => { const sc = document.createElement('script'); sc.src = 'https://s3.tradingview.com/tv.js'; sc.onload = res; sc.onerror = () => { tvLoading = null; rej(); }; document.head.appendChild(sc); });
+}
+async function mountTV() {
+  const box = $('#tv'); box.innerHTML = '<div class="empty">트레이딩뷰 불러오는 중…</div>';
+  try { await loadTV(); } catch { /* 아래에서 안내 */ }
+  if (cfg.chart !== 'tv') return;
+  box.innerHTML = '';
   if (typeof TradingView === 'undefined') { box.innerHTML = '<div class="empty">트레이딩뷰 차트를 불러오지 못했어요 (광고 차단기·네트워크 확인)</div>'; return; }
   const dark = document.documentElement.dataset.theme === 'dark' || (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);
   new TradingView.widget({
@@ -990,6 +1039,7 @@ function tabSet(body) {
       <div class="lbl">자금 리셋 — 청산 등으로 잔고가 줄었을 때 시작 자금까지 다시 채워요. 거래·일지·손실 기록은 그대로 남고, 채운 돈은 '추가 입금'으로 기록돼 수익률은 리셋 전 손실까지 포함해서 계산돼요.</div>
       <div class="row"><button class="btn2" id="sTopSpot">현물 자금 리셋</button><button class="btn2" id="sTopFut">선물 자금 리셋</button></div>
       ${(ME.resets || []).length ? `<div class="note">${ME.resets.slice(-6).reverse().map((r) => `${ftime(r.t)} ${r.mkt === 'fut' ? '선물' : '현물'} ${fmoney(r.before)} → ${fmoney(r.after)} USDT${r.liq ? ` · 그 사이 강제청산 ${r.liq}회` : ''}${r.why ? ' · ' + esc(r.why) : ''}`).join('<br>')}${ME.resets.length > 6 ? `<br>… 모두 ${ME.resets.length}회` : ''}</div>` : ''}
+      ${(() => { const B = LS.get('desk.me.backups', []); return B.length ? `<div class="lbl">보관함 — 기기 사이 충돌·처음 연결 때 덮이지 않게 따로 둔 이 기기의 기록 (최근 10개)</div>` + B.slice().reverse().map((b, i) => `<div class="row note"><span style="flex:1">${ftime(b.t)} · ${esc(b.why)} · 체결 ${b.me.fills.length}건 · 선물 ${fmoney(b.me.fut.wallet)}</span><button class="btn2" data-bk-dl="${B.length - 1 - i}">내려받기</button><button class="btn2" data-bk-use="${B.length - 1 - i}">되살리기</button></div>`).join('') : ''; })()}
       <div class="row"><button class="btn2 danger" id="sReset">모두 지우고 새로 시작</button></div>
       <div class="note">시작 ${ftime(ME.created)} · 거래 ${ME.trades.length}건 · 체결 ${ME.fills.length}건</div></section>
     <section><h3>연결 점검</h3><div class="note">문제가 있을 때 눌러서 결과를 캡처해 주세요.</div><button class="btn2" id="sDiag">점검</button><div id="diag" class="note num"></div></section></div>`;
@@ -1029,6 +1079,13 @@ function tabSet(body) {
     save(); renderAll(); toast(`${name} 자금을 리셋했어요 (+${fmoney(r.add)} USDT)`);
   };
   $('#sTopSpot').onclick = () => doTop('spot'); $('#sTopFut').onclick = () => doTop('fut');
+  $$('[data-bk-dl]').forEach((b) => b.onclick = () => { const x = LS.get('desk.me.backups', [])[+b.dataset.bkDl]; if (!x) return; const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(x.me, null, 1)], { type: 'application/json' })); a.download = `desk-backup-${new Date(x.t).toISOString().slice(0, 16)}.json`; a.click(); });
+  $$('[data-bk-use]').forEach((b) => b.onclick = async () => {
+    const B = LS.get('desk.me.backups', []), x = B[+b.dataset.bkUse]; if (!x) return;
+    const ok = await modal(`<b>보관본(${ftime(x.t)})으로 되돌릴까요?</b><div class="note">지금 계좌는 보관함에 넣고, 보관본을 현재 계좌로 저장소에 올려요. 다른 기기도 20초 안에 따라와요.</div>`, [{ label: '취소', ret: false }, { label: '되살리기', ret: true }]);
+    if (!ok) return;
+    backup(ME, '되살리기 전 계좌'); ME = migrateMe(x.me); save(); renderAll(); paintDrawings(); toast('보관본으로 되돌렸어요');
+  });
   $('#sReset').onclick = async () => {
     const ok = await modal('<b>계좌를 초기화할까요?</b><div class="note">지금까지의 포지션·주문·체결·일지가 모두 지워지고 시작 자금으로 새로 시작해요. 저장소의 이전 기록은 GitHub 커밋 기록에 남아 있어요.</div>', [{ label: '취소', ret: false }, { label: '초기화', ret: true, cls: 'danger' }]);
     if (!ok) return;
@@ -1154,12 +1211,13 @@ async function pageMkt(el) {
 }
 
 // ── 성과: 세 계좌 비교 + 주간 평가
-function mdd(vals) { let pk = -Infinity, m = 0; for (const v of vals) { pk = Math.max(pk, v); if (pk > 0) m = Math.min(m, v / pk - 1); } return m; }
+function mdd(vals) { let pk = -Infinity, m = 0; for (const v of vals) { if (v == null) continue; pk = Math.max(pk, v); if (pk > 0) m = Math.min(m, Math.max(-1, v / pk - 1)); } return m; }
+const ddPts = (pts) => pts.flatMap((p) => p.lo != null ? [p.lo, p.v] : [p.v]);     // 그날 최저까지 넣어 낙폭 계산
 function acctSeries(st, hist, livePx) {     // 합계(현물+선물) 평가액 시계열 + 지금
   if (!st) return null;
   const init = (st.init.spot ?? st.init.krw ?? 0) + (st.init.usdt ?? 0);
   const extra = (t) => E.deposited(st, 'spot', t) + E.deposited(st, 'fut', t) - init;     // 자금 리셋으로 넣은 돈은 빼고 = 처음 자금 + 총 손익
-  const pts = [{ t: st.created || 0, v: init }].concat((hist || []).map((r) => ({ t: r.t, v: r.spot + r.fut - extra(r.t) })));
+  const pts = [{ t: st.created || 0, v: init }].concat((hist || []).map((r) => ({ t: r.t, v: r.spot + r.fut - extra(r.t), lo: r.lo != null ? r.lo - extra(r.t) : null })));
   const eq = E.equity(st, livePx), cur = eq.spot + eq.fut - extra(now());
   if (isFinite(cur)) pts.push({ t: now(), v: cur });
   return { init, pts: pts.filter((p) => isFinite(p.t) && isFinite(p.v)).sort((a, b) => a.t - b.t), eq };
@@ -1170,9 +1228,11 @@ function recordEq() {     // 내 계좌 하루 한 줄 (그날 안에서는 마�
   for (const s of Object.keys(ME.spot.hold)) if (!(px.spot[s] > 0)) return;
   for (const s of Object.keys(ME.fut.pos)) if (!(px.fut[s] > 0)) return;
   const eq = E.equity(ME, px), day = new Date(now() + 9 * 3600e3).toISOString().slice(0, 10);
-  const row = { day, t: now(), spot: Math.round(eq.spot * 100) / 100, fut: Math.round(eq.fut * 100) / 100 };
+  const v = Math.round((eq.spot + eq.fut) * 100) / 100;
+  const row = { day, t: now(), spot: Math.round(eq.spot * 100) / 100, fut: Math.round(eq.fut * 100) / 100, lo: v, hi: v };
   const H = ME.eqHist ||= [], L = H[H.length - 1];
-  if (L && L.day === day) { Object.assign(L, row); LS.set('desk.me', ME); } else { H.push(row); save(); }
+  if (L && L.day === day) { Object.assign(L, row, { lo: Math.min(L.lo ?? v, v), hi: Math.max(L.hi ?? v, v) }); LS.set('desk.me', ME); }   // 그날 최저·최고도 남김 (낙폭 계산)
+  else { H.push(row); save(); }
 }
 let perfChart = null;
 async function pagePerf(el) {
@@ -1182,8 +1242,8 @@ async function pagePerf(el) {
   const ret = (a) => a ? a.pts[a.pts.length - 1].v / a.init - 1 : null;
   const NAME = { A: 'TSB7 1/6 (현행)', B: 'TSB7 1/5 + 상한 80%', C: 'TSB7 1/4', D: 'TSB7 + BB20', H: 'BTC 보유', F: 'BTC 50일선 필터' };
   const rows = [
-    { k: 'me', name: '나', sub: '재량 · 바이낸스 USDT' + ((ME.resets || []).length ? ` · 자금 리셋 ${ME.resets.length}회 (+${fmoney(ME.resets.reduce((a, r) => a + r.add, 0))})` : ''), r: ret(me), spot: me ? (me.eq.spot - E.deposited(ME, 'spot')) / (ME.init.spot ?? 1e4) : null, fut: me ? (me.eq.fut - E.deposited(ME, 'fut')) / ME.init.usdt : null, dd: me ? mdd(me.pts.map((p) => p.v)) : null, n: sm.n, win: sm.win, R: sm.expR, since: ME.created, pts: me?.pts, base: me?.init, color: cssv('--accent') },
-    { k: 'cl', name: 'Claude', sub: '재량 · 하루 2번 판단', r: ret(cl), spot: cl ? cl.eq.spot / CL.init.spot - 1 : null, fut: cl ? cl.eq.fut / CL.init.usdt - 1 : null, dd: cl ? mdd(cl.pts.map((p) => p.v)) : null, n: sc?.n, win: sc?.win, R: sc?.expR, since: CL?.created, pts: cl?.pts, base: cl?.init, color: '#7c6bd6' },
+    { k: 'me', name: '나', sub: '재량 · 바이낸스 USDT' + ((ME.resets || []).length ? ` · 자금 리셋 ${ME.resets.length}회 (+${fmoney(ME.resets.reduce((a, r) => a + r.add, 0))})` : ''), r: ret(me), spot: me ? (me.eq.spot - E.deposited(ME, 'spot')) / (ME.init.spot ?? 1e4) : null, fut: me ? (me.eq.fut - E.deposited(ME, 'fut')) / ME.init.usdt : null, dd: me ? mdd(ddPts(me.pts)) : null, n: sm.n, win: sm.win, R: sm.expR, since: ME.created, pts: me?.pts, base: me?.init, color: cssv('--accent') },
+    { k: 'cl', name: 'Claude', sub: '재량 · 하루 2번 판단', r: ret(cl), spot: cl ? (cl.eq.spot - E.deposited(CL, 'spot')) / CL.init.spot : null, fut: cl ? (cl.eq.fut - E.deposited(CL, 'fut')) / CL.init.usdt : null, dd: cl ? mdd(ddPts(cl.pts)) : null, n: sc?.n, win: sc?.win, R: sc?.expR, since: CL?.created, pts: cl?.pts, base: cl?.init, color: '#7c6bd6' },
   ];
   const BC = { A: cssv('--ok'), B: '#2a9d8f', H: cssv('--mute') };
   for (const b of (BOT?.rows || []).filter((r) => ['A', 'B', 'C', 'D', 'H'].includes(r.a))) {
@@ -1197,8 +1257,8 @@ async function pagePerf(el) {
       <div class="tile"><small>승률</small><b class="num">${tp(sm.win)}</b><em>손익비 ${sm.payoff ? sm.payoff.toFixed(2) : '–'}</em></div>
       <div class="tile"><small>거래당 기대값</small><b class="num ${cls(sm.expR)}">${sm.expR != null ? sm.expR.toFixed(2) + 'R' : '–'}</b><em>${fsign(sm.exp)} USDT</em></div>
       <div class="tile"><small>규칙 준수</small><b class="num">${tp(sm.rule)}</b><em>돌아보기를 남긴 거래 기준</em></div></div></div>
-    <div class="pg"><h2 class="pt">세 계좌 비교 <small>시작일이 달라 같은 기간 비교는 아니에요 · 봇은 업비트 원화 · 수익률 = 총 손익 ÷ 처음 자금 (자금 리셋 전 손실 포함)</small></h2>
-      <div class="tbody" style="padding:0"><table class="t cmp"><thead><tr><th class="l">계좌</th><th>수익률</th><th>현물</th><th>선물</th><th>최대 낙폭</th><th>끝난 거래</th><th>승률</th><th>평균 R</th><th class="l">시작</th></tr></thead><tbody>
+    <div class="pg"><h2 class="pt">세 계좌 비교 <small>시작일이 달라 같은 기간 비교는 아니에요 · 봇은 업비트 원화 · 누적 손익률 = 총 손익 ÷ 처음 자금 (리셋 전 손실 포함 — 전액 손실 두 번이면 −200%) · 체결 조건도 달라요: Claude 선물은 근사 가격·펀딩 없음</small></h2>
+      <div class="tbody" style="padding:0"><table class="t cmp"><thead><tr><th class="l">계좌</th><th title="총 손익 ÷ 처음 자금. 자금 리셋으로 채운 돈은 손익이 아님">누적 손익률</th><th>현물</th><th>선물</th><th title="일별 기록(그날 최저 포함) 기준">최대 낙폭</th><th>끝난 거래</th><th>승률</th><th>평균 R</th><th class="l">시작</th></tr></thead><tbody>
       ${rows.map((r) => `<tr><td class="l">${r.color ? `<i style="display:inline-block;width:10px;height:3px;background:${r.color};vertical-align:middle;margin-right:6px"></i>` : ''}<b>${r.name}</b> <span class="mute">${esc(r.sub)}</span></td><td class="num"><b>${pc1(r.r)}</b></td><td class="num">${pc1(r.spot)}</td><td class="num">${pc1(r.fut)}</td><td class="num">${pc1(r.dd)}</td><td class="num">${r.n ?? '–'}</td><td class="num">${tp(r.win)}</td><td class="num">${r.R != null ? r.R.toFixed(2) : '–'}</td><td class="l num mute">${r.since ? ftime(r.since).slice(0, 5) : '–'}</td></tr>`).join('')}
       </tbody></table></div>
       <div id="perfChart"></div><div class="legend" id="perfLeg"></div></div>
