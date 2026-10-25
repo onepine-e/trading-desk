@@ -864,7 +864,19 @@ function renderChips() {
   $('#chips').innerHTML = SYMS.map((s) => `<button class="chip ${s === ui.sym ? 'on' : ''}" data-sym="${s}"><b>${s}</b><span class="num" data-px="${s}">–</span><span class="num" data-chg="${s}"></span></button>`).join('');
   $$('#chips .chip').forEach((b) => b.onclick = () => { ui.sym = b.dataset.sym; renderChips(); mountChart(); renderForm(); paintOB(); });
   for (const s of SYMS) paintTick(ui.mkt, s);
+  fitChips();
 }
+// PC: 종목 버튼을 줄마다 같은 개수로 (8개면 한 줄 8칸, 좁으면 4칸 × 2줄 — 7+1 처럼 끊기지 않게)
+function fitChips() {
+  const el = $('#chips'); if (!el) return;
+  if (isPhone()) { el.style.removeProperty('--cols'); return; }
+  if (el.clientWidth < 100) { requestAnimationFrame(fitChips); return; }     // 아직 자리를 안 잡았으면 다음 프레임에
+  const n = SYMS.length, fit = Math.max(1, Math.floor((el.clientWidth + 6) / 126));
+  const rows = Math.ceil(n / Math.min(n, fit)), cols = Math.ceil(n / rows);
+  el.style.setProperty('--cols', cols);
+}
+window.addEventListener('resize', () => fitChips());
+if (window.ResizeObserver) new ResizeObserver(() => fitChips()).observe(document.querySelector('#chips') || document.body);
 let topTimer = 0, tabTimer = 0;
 function paintTick(mkt, s) {
   if (mkt === ui.mkt) {

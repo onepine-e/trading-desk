@@ -134,8 +134,11 @@ canvas{max-width:100%}
 .clegend{position:absolute;left:8px;top:6px;z-index:3;pointer-events:none;font-size:12px;font-family:var(--num);line-height:1.5;background:color-mix(in srgb,var(--panel) 80%,transparent);border-radius:4px;padding:1px 5px;max-width:calc(100% - 90px)}
 .clegend .mute{margin-left:4px}
 /* 종목: PC 에서도 버튼 격자 (가로 스크롤 없이) */
-#symBar{flex-wrap:wrap}#chips{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;overflow:visible;flex:1 1 560px;padding:0}
-#chips .chip{justify-content:space-between;padding:7px 10px}
+#symBar{flex-wrap:wrap}
+#chips{display:grid;grid-template-columns:repeat(var(--cols,8),minmax(0,1fr));gap:6px;overflow:visible;flex:1 1 560px;min-width:0;padding:0}
+#chips .chip{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:baseline;gap:1px 6px;padding:6px 10px;min-width:0;overflow:hidden;white-space:nowrap;text-align:left}
+#chips .chip b{grid-row:1;grid-column:1}#chips .chip [data-chg]{grid-row:1;grid-column:2;text-align:right;font-size:11px}
+#chips .chip [data-px]{grid-row:2;grid-column:1/-1;font-size:13px;overflow:hidden;text-overflow:ellipsis}
 .pnav{position:sticky;top:0;z-index:30;display:flex;gap:4px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:4px;box-shadow:0 2px 10px rgba(0,0,0,.06)}
 .pnav button{flex:1;max-width:170px;border:0;background:none;padding:9px 6px;border-radius:6px;font-weight:500;cursor:pointer;color:var(--mute);display:flex;gap:6px;align-items:center;justify-content:center}
 .pnav button.on{background:var(--accbg);color:var(--accent)}
@@ -172,11 +175,13 @@ details.sec{border-top:1px solid var(--line);padding:10px 2px}details.sec>summar
   .tradepane{display:grid;grid-template-columns:minmax(0,40%) minmax(0,60%)}
   .obmini{display:block;border-right:1px solid var(--line);padding-top:4px}
   .tradepane #formPane .form{padding:8px}
+  #topBar{position:relative;padding-right:56px}#gearBtn{position:absolute;top:8px;right:10px}
   /* 폰: 현물/선물 버튼은 한 줄 꽉 채우고, 종목은 4칸 격자(가로 스크롤 없이 한눈에) */
   #symBar{flex-direction:column;align-items:stretch;gap:6px}
   #mktSeg{display:grid;grid-template-columns:1fr 1fr}#mktSeg button{padding:8px 6px}
-  #chips{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;overflow:visible;padding:0}
-  #chips .chip{flex-direction:column;align-items:center;gap:1px;padding:7px 2px;min-width:0;white-space:normal;text-align:center}
+  #chips{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;overflow:visible;padding:0;flex:none}
+  #chips .chip{display:flex;flex-direction:column;align-items:center;gap:1px;padding:7px 2px;min-width:0;white-space:normal;text-align:center}
+  #chips .chip [data-px],#chips .chip [data-chg]{text-align:center}
   #chips .chip b{font-size:14px}#chips .chip .num{font-size:11px;line-height:1.25;max-width:100%;overflow:hidden;text-overflow:ellipsis}
 }
 @media (max-width:760px){.mk{grid-template-columns:1fr}.blist2{flex-direction:row;overflow-x:auto;max-height:none}.blist2 button{min-width:200px}.pnav button{font-size:13px}.main{grid-template-columns:1fr}#tvwrap{height:440px}.brief{grid-template-columns:1fr}.hide-s{display:none}}
@@ -185,7 +190,7 @@ details.sec{border-top:1px solid var(--line);padding:10px 2px}details.sec>summar
 </head>
 <body>
 <div class="wrap">
-  <div class="bar">
+  <div class="bar" id="topBar">
     <div class="brand"><i></i>트레이딩 데스크</div>
     <div class="seg" id="acctSeg" role="tablist" aria-label="계좌">
       <button data-acct="me" class="on">내 계좌</button>
@@ -236,7 +241,7 @@ details.sec{border-top:1px solid var(--line);padding:10px 2px}details.sec>summar
 <div class="toast" id="toast"></div>
 <div id="modalRoot"></div>
 <script src="vendor/lightweight-charts-5.1.0.js"></script><!-- 외부 CDN 대신 이 저장소에 둔 사본 (변조 위험 줄이기) · 트레이딩뷰 tv.js 는 그 보기를 고를 때만 불러옴 -->
-<script src="engine.js"></script>
-<script src="app.js"></script>
+<script src="engine.js?v=202610251703"></script>
+<script src="app.js?v=202610251703"></script><!-- ?v= 는 배포할 때마다 바꿔서 브라우저가 예전 파일을 쓰지 않게 -->
 </body>
 </html>
