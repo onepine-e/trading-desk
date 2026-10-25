@@ -575,6 +575,18 @@ const SUB = {
   cci: { name: 'CCI 20', levels: [100, -100], calc: (B) => { const tp = B.C.map((c, i) => (B.H[i] + B.L[i] + c) / 3), m = smaA(tp, 20); return [{ label: 'CCI', data: tp.map((v, i) => { if (m[i] == null) return null; let d = 0; for (let k = i - 19; k <= i; k++) d += Math.abs(tp[k] - m[i]); d /= 20; return d ? (v - m[i]) / (0.015 * d) : 0; }) }]; } },
   willr: { name: '윌리엄스 %R 14', levels: [-20, -80], calc: (B) => { const hh = hhA(B.H, 14), ll = llA(B.L, 14); return [{ label: '%R', data: B.C.map((c, i) => hh[i] == null || hh[i] === ll[i] ? null : (hh[i] - c) / (hh[i] - ll[i]) * -100) }]; } },
   mfi: { name: 'MFI 14 (자금 흐름)', levels: [80, 20], calc: (B) => { const tp = B.C.map((c, i) => (B.H[i] + B.L[i] + c) / 3); return [{ label: 'MFI', data: tp.map((v, i) => { if (i < 14) return null; let p = 0, n = 0; for (let k = i - 13; k <= i; k++) { const f = B.V[k]; if (tp[k] > tp[k - 1]) p += f; else if (tp[k] < tp[k - 1]) n += f; } return n === 0 ? 100 : 100 - 100 / (1 + p / n); }) }]; } },
+  vixfix: { name: 'Williams Vix Fix 22 (CM, 공포 바닥)', calc: (B) => {
+    // CM_Williams_Vix_Fix: wvf = (n봉 최고 종가 − 저가) ÷ n봉 최고 종가 × 100 · 볼린저 위(20·2) 또는 50봉 최고×0.85 넘으면 초록 = 투매 바닥 후보
+    const hc = hhA(B.C, 22), wvf = B.L.map((l, i) => hc[i] == null ? null : (hc[i] - l) / hc[i] * 100);
+    const mid = smaA(wvf, 20), sd = wvf.map((_, i) => { if (mid[i] == null) return null; let q = 0; for (let k = i - 19; k <= i; k++) q += (wvf[k] - mid[i]) ** 2; return Math.sqrt(q / 20); });
+    const rh = wvf.map((_, i) => i < 49 || wvf.slice(i - 49, i + 1).some((x) => x == null) ? null : Math.max(...wvf.slice(i - 49, i + 1)) * 0.85);
+    return [{ label: 'WVF', data: wvf, hist: true, hcolors: wvf.map((v, i) => v != null && ((mid[i] != null && v >= mid[i] + 2 * sd[i]) || (rh[i] != null && v >= rh[i])) ? '#3fbf75' : '#8b94a1') }];
+  } },
+  wt: { name: 'WaveTrend 10·21 (LazyBear)', levels: [60, 53, -53, -60], calc: (B) => {
+    const ap = B.C.map((c, i) => (B.H[i] + B.L[i] + c) / 3), esa = ema(ap, 10), d = ema(ap.map((v, i) => esa[i] == null ? null : Math.abs(v - esa[i])), 10);
+    const ci = ap.map((v, i) => esa[i] == null || !d[i] ? null : (v - esa[i]) / (0.015 * d[i])), wt1 = ema(ci, 21), wt2 = smaA(wt1, 4);
+    return [{ label: 'WT1', data: wt1, color: '#3fbf75' }, { label: 'WT2', data: wt2, color: '#e5534b' }, { label: 'WT1−WT2', data: wt1.map((v, i) => v == null || wt2[i] == null ? null : v - wt2[i]), hist: true, hcolors: wt1.map(() => 'rgba(74,144,255,.35)') }];
+  } },
   obv: { name: 'OBV (누적 거래량)', calc: (B) => { let o = 0; return [{ label: 'OBV', data: B.C.map((c, i) => { if (i > 0) o += c > B.C[i - 1] ? B.V[i] / c : c < B.C[i - 1] ? -B.V[i] / c : 0; return o; }) }]; } },
 };
 // 예전 설정(myInd) → 새 설정(ind)
@@ -597,11 +609,11 @@ const ICON = {
 function renderChartBar() {
   const my = cfg.chart === 'my', I = indCfg();
   const nInd = Object.keys(OVER).filter((k) => k !== 'vol' && I[k]).length + I.subs.length;
-  const tip = ui.draw === 'h' ? '수평선을 그을 가격을 누르세요' : ui.draw === 't' ? (ui.drawA ? '두 번째 점을 누르세요' : '추세선 첫 점을 누르세요') : ui.draw === 'f' ? (ui.drawA ? '두 번째 가격(끝)을 누르세요' : '피보나치 시작 가격(고점이나 저점)을 누르세요') : CHART_TIP();
+  const tip = ui.draw === 'm' ? '잴 구간을 끌어서 그리세요 (PC 는 언제든 Shift + 끌기)' : ui.draw === 'h' ? '수평선을 그을 가격을 누르세요' : ui.draw === 't' ? (ui.drawA ? '두 번째 점을 누르세요' : '추세선 첫 점을 누르세요') : ui.draw === 'f' ? (ui.drawA ? '두 번째 가격(끝)을 누르세요' : '피보나치 시작 가격(고점이나 저점)을 누르세요') : CHART_TIP();
   $('#chartBar').innerHTML = `<div class="seg" id="chartSeg"><button data-c="my" class="${my ? 'on' : ''}">포지션 차트</button><button data-c="tv" class="${!my ? 'on' : ''}">트레이딩뷰</button></div>
     ${my ? `<div class="seg" id="ivSeg">${IVS.map(([k, v]) => `<button data-iv="${k}" class="${cfg.myIv === k ? 'on' : ''}">${v}</button>`).join('')}</div>
     <button class="btn2 tbtn" id="indBtn" aria-expanded="false">${ICON.ind} 지표${nInd ? ` <span class="cnt num">${nInd}</span>` : ''}</button>
-    <div class="seg" id="drawSeg"><button data-d="h" class="drawbtn ${ui.draw === 'h' ? 'on' : ''}" title="누른 가격에 수평선">─ 수평선</button><button data-d="t" class="drawbtn ${ui.draw === 't' ? 'on' : ''}" title="두 점을 눌러 추세선 (오른쪽으로 연장)">╱ 추세선</button><button data-d="f" class="drawbtn ${ui.draw === 'f' ? 'on' : ''}" title="두 가격을 눌러 피보나치 되돌림">피보</button><button data-d="undo" title="마지막 선 지우기">↶</button><button data-d="clear" title="이 종목의 내 선 모두 지우기">지우기</button></div>
+    <div class="seg" id="drawSeg"><button data-d="h" class="drawbtn ${ui.draw === 'h' ? 'on' : ''}" title="누른 가격에 수평선">─ 수평선</button><button data-d="t" class="drawbtn ${ui.draw === 't' ? 'on' : ''}" title="두 점을 눌러 추세선 (오른쪽으로 연장)">╱ 추세선</button><button data-d="f" class="drawbtn ${ui.draw === 'f' ? 'on' : ''}" title="두 가격을 눌러 피보나치 되돌림">피보</button><button data-d="m" class="drawbtn ${ui.draw === 'm' ? 'on' : ''}" title="구간 수익률 재기 (PC 는 Shift + 끌기)">측정</button><button data-d="undo" title="마지막 선 지우기">↶</button><button data-d="clear" title="이 종목의 내 선 모두 지우기">지우기</button></div>
     <div class="seg"><button id="logBtn" class="${cfg.myLog ? 'on' : ''}" title="로그 눈금 (큰 변동을 비율로)">로그</button><button id="fitBtn" title="전체 보기">${ICON.fit}</button><button id="shotBtn" title="차트 이미지 저장">${ICON.shot}</button></div>
     <span class="note" id="chartNote">${tip}</span>` : '<span class="note">지표·그리기는 트레이딩뷰 안에서 · 내 진입선·내 선은 포지션 차트에서</span>'}`;
   $$('#chartSeg button').forEach((b) => b.onclick = () => { cfg.chart = b.dataset.c; saveCfg(); mountChart(); });
@@ -650,6 +662,7 @@ function mountChart(keepPop) {
   if (!keepPop) toggleIndPop(false);
   renderChartBar();
   if (keepPop && $('#indPop')) { /* 열린 채로 */ } else if (keepPop) toggleIndPop(true);
+  if (mc) clearInterval(mc.ovTimer);
   if (cfg.chart === 'tv') { if (mc) { mc.chart.remove(); mc = null; } $('#mychart').hidden = true; $('#tv').hidden = false; mountTV(); return; }
   $('#tv').hidden = true; $('#tv').innerHTML = ''; $('#mychart').hidden = false;
   if (mc) { mc.chart.remove(); mc = null; }
@@ -691,6 +704,7 @@ function mountChart(keepPop) {
   const P = chart.panes(); if (P.length > 1) { P[0].setStretchFactor(Math.max(2, 4 - I.subs.length) + 1); for (let i = 1; i < P.length; i++) P[i].setStretchFactor(1); }
   // 맨 위 왼쪽: 봉 정보 (마우스를 올린 봉, 없으면 마지막 봉)
   const lg = document.createElement('div'); lg.className = 'clegend'; el.appendChild(lg); mc.legend = lg;
+  setupOverlay(el, chart);
   chart.subscribeCrosshairMove((p) => paintLegend(p && p.time != null ? p.time : null));
   const onClick = (p) => {
     if (!p.point || !mc || (p.paneIndex ?? 0) > 0 || !ui.draw) return;      // 그리기 중이 아니거나 보조지표 칸이면 무시
@@ -758,7 +772,7 @@ function calcInd() {
     const specs = SUB[sb.k].calc(B), UP = cssv('--upbg'), DN = cssv('--dnbg');
     specs.forEach((sp, q) => {
       const ser = sb.sers[q];
-      if (sp.hist) ser.setData(sp.data.map((v, i) => nz(v) == null ? null : { time: T(i), value: v, color: v >= 0 ? UP : DN }).filter(Boolean));
+      if (sp.hist) ser.setData(sp.data.map((v, i) => nz(v) == null ? null : { time: T(i), value: v, color: sp.hcolors ? sp.hcolors[i] : v >= 0 ? UP : DN }).filter(Boolean));
       else put(ser, sp.data);
     });
   });
@@ -771,6 +785,110 @@ function paintLegend(time) {
   mc.legend.innerHTML = `<b>${ui.sym}</b> <span class="mute">${ui.mkt === 'fut' ? '무기한' : '현물'} · ${iv}</span> <span class="mute">시</span>${fpx(b.o)} <span class="mute">고</span>${fpx(b.h)} <span class="mute">저</span>${fpx(b.l)} <span class="mute">종</span><span class="${cls(ch)}">${fpx(b.c)} ${fpct(ch)}</span>`
     + (mc.over.length ? `<div>${mc.over.filter((o, j, a) => /^(SMA|EMA)/.test(o.label) || a.findIndex((x) => x.k === o.k) === j).map((o) => `<span style="color:${o.color}">${esc(/^(SMA|EMA)/.test(o.label) ? o.label : SHORT[o.k] || o.label)}</span>`).join(' · ')}</div>` : '');
 }
+// ───────────────────────────── 차트 위 손잡이: ① Shift + 끌기(또는 '측정' 단추) = 구간 수익률 ② 손절·익절·대기 주문 선 = 끌어서 옮기기 · × 로 지우기
+function fmtDur(sec) {
+  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.round((sec % 3600) / 60);
+  return d ? `${d}일${h ? ` ${h}시간` : ''}` : h ? `${h}시간${m ? ` ${m}분` : ''}` : `${m}분`;
+}
+function setupOverlay(el, chart) {
+  const ov = document.createElement('div'); ov.className = 'cov'; el.appendChild(ov);
+  mc.ov = ov; mc.meas = null;
+  const pane0H = () => chart.panes()[0]?.getHeight() ?? 0;
+  const xy = (e) => { const r = el.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  // ① 측정
+  let mDrag = false;
+  el.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('.lh')) return;
+    const want = e.shiftKey || ui.draw === 'm';
+    if (!want) { if (mc.meas && !mDrag) { mc.meas = null; paintOverlay(); } return; }
+    const [x, y] = xy(e); if (y > pane0H()) return;
+    const p = mc.cs.coordinateToPrice(y), l = chart.timeScale().coordinateToLogical(x);
+    if (p == null || l == null) return;
+    chart.applyOptions({ handleScroll: false, handleScale: false });      // 끄는 동안 차트가 움직이지 않게
+    mDrag = true; mc.meas = { p0: p, l0: l, p1: p, l1: l };
+    el.setPointerCapture?.(e.pointerId);
+    e.preventDefault(); paintOverlay();
+  }, true);
+  el.addEventListener('pointermove', (e) => {
+    if (!mDrag || !mc.meas) return;
+    const [x, y] = xy(e), p = mc.cs.coordinateToPrice(Math.min(y, pane0H() - 1)), l = chart.timeScale().coordinateToLogical(x);
+    if (p != null) mc.meas.p1 = p; if (l != null) mc.meas.l1 = l;
+    paintOverlay();
+  }, true);
+  const end = () => { if (!mDrag) return; mDrag = false; chart.applyOptions({ handleScroll: true, handleScale: true }); if (ui.draw === 'm') { ui.draw = null; renderChartBar(); } };
+  el.addEventListener('pointerup', end, true); el.addEventListener('pointercancel', end, true);
+  mc.ovTimer = setInterval(paintOverlay, 250);       // 차트를 움직이거나 눈금이 바뀌어도 손잡이가 선을 따라가게
+}
+function overlayLines() {      // 지금 종목·시장의 끌 수 있는 선들 (내 계좌만)
+  if (readOnly()) return [];
+  const mk = ui.mkt, s = ui.sym, out = [];
+  const x = mk === 'fut' ? ME.fut.pos[s] : ME.spot.hold[s];
+  if (x) { if (x.sl != null) out.push({ kind: 'sl', price: x.sl, label: '손절', cls: 'sl' }); if (x.tp != null) out.push({ kind: 'tp', price: x.tp, label: '익절', cls: 'tp' }); }
+  for (const o of ME.orders) if (o.status === 'open' && o.mkt === mk && o.sym === s && o.price > 0) out.push({ kind: 'ord', id: o.id, price: o.price, label: `${typeTxt(o)} ${sideTxt(o)}`, cls: 'ord' });
+  return out;
+}
+function paintOverlay() {
+  if (!mc || !mc.ov) return;
+  if (!mc.ov.isConnected) { clearInterval(mc.ovTimer); return; }
+  const pn = mc.chart.panes?.()[0]; if (!pn) return;
+  const chart = mc.chart, ov = mc.ov, H0 = pn.getHeight(), psw = chart.priceScale('right').width(), W = ov.parentElement.clientWidth - psw;
+  let html = '';
+  // 측정 상자
+  const m = mc.meas;
+  if (m) {
+    const x0 = chart.timeScale().logicalToCoordinate(m.l0), x1 = chart.timeScale().logicalToCoordinate(m.l1), y0 = mc.cs.priceToCoordinate(m.p0), y1 = mc.cs.priceToCoordinate(m.p1);
+    if ([x0, x1, y0, y1].every((v) => v != null)) {
+      const d = m.p1 - m.p0, pc = d / m.p0, bars = Math.round(m.l1 - m.l0), up = d >= 0;
+      const L = Math.min(x0, x1), T = Math.min(y0, y1), Wd = Math.abs(x1 - x0), Hd = Math.abs(y1 - y0);
+      html += `<div class="mbox ${up ? 'up' : 'dn'}" style="left:${L}px;top:${T}px;width:${Wd}px;height:${Hd}px"></div>
+        <div class="mlab ${up ? 'up' : 'dn'}" style="left:${Math.max(4, Math.min(W - 190, L + Wd / 2 - 90))}px;top:${Math.min(H0 - 52, (up ? T - 50 : T + Hd + 6) < 0 ? T + Hd + 6 : (up ? T - 50 : T + Hd + 6))}px">
+        ${up ? '+' : '−'}${fpx(Math.abs(d))} (${fpct(pc)})<br>${Math.abs(bars)}봉 · ${fmtDur(Math.abs(bars) * ivSec(cfg.myIv))}</div>`;
+    }
+  }
+  // 선 손잡이
+  for (const ln of overlayLines()) {
+    const y = mc.cs.priceToCoordinate(ln.price);
+    if (y == null || y < 0 || y > H0) continue;
+    html += `<div class="lh ${ln.cls}" style="top:${y - 10}px;right:${psw + 4}px" data-k="${ln.kind}" data-id="${ln.id || ''}"><span class="lhg" data-lab="${ln.label}" title="끌어서 가격 옮기기">${ln.label} ${fpx(ln.price)}</span><button class="lhx" title="${ln.kind === 'ord' ? '주문 취소' : '지우기'}">×</button></div>`;
+  }
+  if (ov._last !== html && !ov._drag) { ov.innerHTML = html; ov._last = html; bindHandles(); }
+}
+function bindHandles() {
+  const ov = mc.ov;
+  $$('.lh', ov).forEach((h) => {
+    const k = h.dataset.k, id = h.dataset.id;
+    h.querySelector('.lhx').onclick = (e) => { e.stopPropagation(); changeLine(k, id, null); };
+    const g = h.querySelector('.lhg');
+    g.onpointerdown = (e) => {
+      e.stopPropagation(); e.preventDefault();
+      const r = ov.getBoundingClientRect(); ov._drag = true; g.setPointerCapture(e.pointerId);
+      mc.chart.applyOptions({ handleScroll: false, handleScale: false });
+      let px = null;
+      g.onpointermove = (ev) => { const y = ev.clientY - r.top; px = mc.cs.coordinateToPrice(y); if (px > 0) { h.style.top = `${y - 10}px`; g.textContent = `${g.dataset.lab} ${fpx(px)}`; } };
+      g.onpointerup = () => { g.onpointermove = null; g.onpointerup = null; ov._drag = false; mc.chart.applyOptions({ handleScroll: true, handleScale: true }); if (px > 0) changeLine(k, id, px); else paintOverlay(); };
+    };
+  });
+}
+function changeLine(kind, id, price) {     // price = null 이면 지우기(주문은 취소)
+  const mk = ui.mkt, s = ui.sym, x = mk === 'fut' ? ME.fut.pos[s] : ME.spot.hold[s];
+  const t = tickSize(price || 1), p = price == null ? null : Math.round(price / t) * t;
+  if (kind === 'ord') {
+    const o = ME.orders.find((z) => z.id === id && z.status === 'open'); if (!o) return;
+    if (p == null) { E.cancelOrder(ME, id, now(), '차트에서 취소'); toast('주문을 취소했어요'); }
+    else { o.price = p; toast(`주문 가격을 ${fpx(p)} 로 옮겼어요`); }
+  } else if (x) {
+    if (p != null) {
+      const long = mk === 'spot' || x.side === 'long', cur = pxOf(mk, s);
+      if (kind === 'sl' && cur && (long ? p >= cur : p <= cur)) { toast(`손절은 현재가 ${long ? '아래' : '위'}에 둬야 해요`); mc.ov._last = null; paintOverlay(); return; }
+      if (kind === 'tp' && cur && (long ? p <= cur : p >= cur)) { toast(`익절은 현재가 ${long ? '위' : '아래'}에 둬야 해요`); mc.ov._last = null; paintOverlay(); return; }
+    }
+    x[kind] = p;
+    const tr = E.trOf(ME, x.tradeId); if (kind === 'sl' && tr && !tr.sl0 && p) { tr.sl0 = p; tr.risk = Math.abs((x.entry ?? x.avg) - p) * x.qty; }
+    toast(p == null ? `${kind === 'sl' ? '손절' : '익절'}을 지웠어요` : `${kind === 'sl' ? '손절' : '익절'} ${fpx(p)}`);
+  }
+  save(); drawLines(); renderTabs(); renderForm(); if (mc) { mc.ov._last = null; paintOverlay(); }
+}
+
 function addDrawing(d) { ((ME.draw ||= {})[ui.sym] ||= []).push(d); save(); paintDrawings(); }
 const FIB = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
 function paintDrawings() {
@@ -812,13 +930,14 @@ function drawLines() {
   const st = view(), mk = ui.mkt, s = ui.sym;
   if (!st) { mc.mk.setMarkers([]); return; }
   const add = (price, color, title, style = 2, w = 1) => { if (price > 0) mc.lines.push(mc.cs.createPriceLine({ price, color, lineWidth: w, lineStyle: style, axisLabelVisible: true, title })); };
+  const hn = !readOnly();     // 내 계좌면 손절·익절·주문 이름은 차트 위 손잡이가 보여 주므로 선 제목은 비움
   const A = cssv('--accent'), OK = cssv('--ok'), W = cssv('--sl'), UP = cssv('--up'), DN = cssv('--dn'), M = cssv('--mute');
   if (mk === 'fut' && st.fut.pos[s]) {
     const p = st.fut.pos[s];
-    add(p.entry, A, `${p.side === 'long' ? '롱' : '숏'} ${p.lev.toFixed(1)}x 진입`, 0, 2); add(p.sl, W, '손절'); add(p.tp, OK, '익절'); add(E.liqPrice(p), p.side === 'long' ? DN : UP, '청산가', 1);
+    add(p.entry, A, `${p.side === 'long' ? '롱' : '숏'} ${p.lev.toFixed(1)}x 진입`, 0, 2); add(p.sl, W, hn ? '' : '손절'); add(p.tp, OK, hn ? '' : '익절'); add(E.liqPrice(p), p.side === 'long' ? DN : UP, '청산가', 1);
   }
-  if (mk === 'spot' && st.spot.hold[s]) { const h = st.spot.hold[s]; add(h.avg, A, '평균 단가', 0, 2); add(h.sl, W, '손절'); add(h.tp, OK, '익절'); }
-  for (const o of st.orders) if (o.status === 'open' && o.mkt === mk && o.sym === s) add(o.price, M, `${typeTxt(o)} ${sideTxt(o)}${o.lev ? ' ' + o.lev + 'x' : ''}`, 1);
+  if (mk === 'spot' && st.spot.hold[s]) { const h = st.spot.hold[s]; add(h.avg, A, '평균 단가', 0, 2); add(h.sl, W, hn ? '' : '손절'); add(h.tp, OK, hn ? '' : '익절'); }
+  for (const o of st.orders) if (o.status === 'open' && o.mkt === mk && o.sym === s) add(o.price, M, hn ? '' : `${typeTxt(o)} ${sideTxt(o)}${o.lev ? ' ' + o.lev + 'x' : ''}`, 1);
   const t0 = mc.bars.length ? mc.bars[0].t : 0;
   const mks = st.fills.filter((f) => f.mkt === mk && f.sym === s && f.t / 1000 >= t0).map((f) => {
     const upish = ['매수', '롱 진입', '숏 청산'].includes(f.side);
@@ -931,7 +1050,9 @@ function renderForm() {
   const avail = isFut ? `가능 ${fmoney(ME.fut.wallet)} USDT` : buy ? `가능 ${fmoney(ME.spot.cash)} USDT` : `보유 ${fqty(holdQty)} ${s}`;
   const levF = isFut ? `<div><div class="row" style="justify-content:space-between"><span class="lbl">레버리지 (격리)</span><span class="num acc" id="levTxt">${ui.lev}x</span></div><div class="lev"><input type="range" id="fLev" min="1" max="100" value="${ui.lev}"><div class="field" style="width:70px"><input id="fLevN" inputmode="numeric" value="${ui.lev}"><span>x</span></div></div></div>` : '';
   const entry = isFut || buy;
-  const sltp = entry ? `<div class="row"><div style="flex:1"><div class="lbl">손절가 (선택)</div><div class="field"><input id="fSL" inputmode="decimal" placeholder="없음"></div></div><div style="flex:1"><div class="lbl">익절가 (선택)</div><div class="field"><input id="fTP" inputmode="decimal" placeholder="없음"></div></div></div>` : '';
+  const pm = !!cfg.sltpPct, u2 = pm ? '%' : '';
+  const sltp = entry ? `<div class="row" style="justify-content:space-between"><span class="lbl">손절 · 익절 (선택)</span><div class="seg mini" id="slMode"><button data-m="px" class="${pm ? '' : 'on'}">가격</button><button data-m="pct" class="${pm ? 'on' : ''}">진입가 ±%</button></div></div>
+    <div class="row"><div class="field" style="flex:1"><input id="fSL" inputmode="decimal" placeholder="${pm ? '손절 −%' : '손절가 없음'}"><span>${u2}</span></div><div class="field" style="flex:1"><input id="fTP" inputmode="decimal" placeholder="${pm ? '익절 +%' : '익절가 없음'}"><span>${u2}</span></div></div>` : '';
   const jr = entry ? `<details class="jr" id="jr"><summary>매매 일지 (진입 이유를 남기면 셋업별 기대값이 계산돼요)</summary><div class="jrin">
       <div class="row"><div class="field" style="flex:1"><select id="fSetup"><option value="">셋업 선택</option>${ME.setups.map((x) => `<option>${esc(x)}</option>`).join('')}</select></div>
       <div class="field" style="flex:1"><select id="fEmo"><option value="">지금 감정</option>${['차분', '확신', '조급', '불안', '본전 생각', '욕심'].map((x) => `<option>${x}</option>`).join('')}</select></div></div>
@@ -955,6 +1076,7 @@ function renderForm() {
     updateCalc();
   });
   $$('#formPane input').forEach((i) => i.addEventListener('input', updateCalc));
+  $$('#slMode button').forEach((b) => b.onclick = () => { cfg.sltpPct = b.dataset.m === 'pct'; saveCfg(); renderForm(); });
   if ($('#goSpot')) $('#goSpot').onclick = () => submit(buy ? 'buy' : 'sell');
   if ($('#goLong')) $('#goLong').onclick = () => submit('long');
   if ($('#goShort')) $('#goShort').onclick = () => submit('short');
@@ -965,8 +1087,12 @@ function updateCalc() {
   const c = $('#calc'); if (!c || readOnly()) return;
   const mk = ui.mkt, s = ui.sym, isFut = mk === 'fut';
   const px = ui.otype === 'market' ? pxOf(mk, s) : numIn('fPrice') ?? pxOf(mk, s);
-  const amt = numIn('fAmt'), sl = numIn('fSL'), tp = numIn('fTP');
+  const amt = numIn('fAmt'), dir = isFut ? 'long' : 'buy', { sl, tp } = formSLTP(dir, px);
   const L = [];
+  if (cfg.sltpPct && px && (numIn('fSL') || numIn('fTP'))) {
+    const pv = (sd) => { const z = formSLTP(sd, px); return `${z.sl ? fpx(z.sl, mk) : '—'} / ${z.tp ? fpx(z.tp, mk) : '—'}`; };
+    L.push([isFut ? '손절 / 익절 (롱)' : '손절 / 익절 가격', pv(dir)]); if (isFut) L.push(['손절 / 익절 (숏)', pv('short')]);
+  }
   if (isFut) {
     const nominal = (amt || 0) * ui.lev, qty = px ? nominal / px : 0;
     const liqL = px && amt ? E.liqPrice({ side: 'long', qty, entry: px, margin: amt }) : null, liqS = px && amt ? E.liqPrice({ side: 'short', qty, entry: px, margin: amt }) : null;
@@ -989,7 +1115,7 @@ function typeTxt(o) { return { market: '시장가', limit: '지정가', stop: '�
 async function submit(side) {
   const mk = ui.mkt, s = ui.sym, t = now();
   const amt = numIn('fAmt'); if (!amt) return toast('수량(금액)을 넣어 주세요');
-  const sl = numIn('fSL'), tp = numIn('fTP');
+  const ref0 = pxOf(mk, s), { sl, tp } = formSLTP(side, ui.otype === 'market' ? ref0 : (numIn('fPrice') || ref0));
   const meta = { sl, tp, setup: $('#fSetup')?.value || null, emotion: $('#fEmo')?.value || null, reason: $('#fReason')?.value?.trim() || '', by: 'manual' };
   const ref = pxOf(mk, s);
   if (!ref) return toast('아직 시세를 받지 못했어요');
@@ -1042,7 +1168,7 @@ function tabPos(body, st) {
       const p = pr.spot[s] ?? x.avg, v = x.qty * p, pnl = v * (1 - E.FEE.spot) - x.qty * x.avg;
       h += `<tr><td class="l"><b>${s}</b></td><td class="num">${fqty(x.qty)}</td><td class="num">${fpx(x.avg)}</td><td class="num">${fpx(p)}</td><td class="num">${fmoney(v)}</td>
         <td class="num ${cls(pnl)}">${fsign(pnl)} (${fpct(pnl / (x.qty * x.avg))})</td><td class="num">${fpx(x.sl)} / ${fpx(x.tp)}</td>
-        ${ro ? '' : `<td><button class="btn2" data-edit="spot:${s}">손절·익절</button> <button class="btn2" data-cs="${s}:0.5">50%</button> <button class="btn2 danger" data-cs="${s}:1">전량 매도</button></td>`}</tr>`;
+        ${ro ? '' : `<td><button class="btn2" data-edit="spot:${s}">손절·익절</button> <button class="btn2" data-close="spot:${s}">종료…</button> <button class="btn2 danger" data-cs="${s}:1">시장가 전량</button></td>`}</tr>`;
     }
     h += '</tbody></table>';
   }
@@ -1053,13 +1179,14 @@ function tabPos(body, st) {
       h += `<tr><td class="l"><b>${s}</b> <span class="pill ${x.side}">${x.side === 'long' ? '롱' : '숏'} ${x.lev.toFixed(1)}x</span></td><td class="num">${fqty(x.qty)}</td><td class="num">${fpx(x.entry, 'fut')}</td><td class="num">${fpx(p, 'fut')}</td>
         <td class="num acc">${fpx(liq, 'fut')}</td><td class="num">${fmoney(x.margin, 'fut')}</td><td class="num ${cls(u)}">${fsign(u, 'fut')} (${fpct(u / x.margin)})</td>
         <td class="num">${fpx(x.sl, 'fut')} / ${fpx(x.tp, 'fut')}</td>
-        ${ro ? '' : `<td><button class="btn2" data-edit="fut:${s}">손절·익절</button> <button class="btn2" data-cf="${s}:0.5">50%</button> <button class="btn2 danger" data-cf="${s}:1">전량 청산</button></td>`}</tr>`;
+        ${ro ? '' : `<td><button class="btn2" data-edit="fut:${s}">손절·익절</button> <button class="btn2" data-close="fut:${s}">종료…</button> <button class="btn2 danger" data-cf="${s}:1">시장가 전량</button></td>`}</tr>`;
     }
     h += '</tbody></table>';
   }
   body.innerHTML = h;
-  $$('[data-cs]', body).forEach((b) => b.onclick = () => { const [s, f] = b.dataset.cs.split(':'); const x = ME.spot.hold[s]; const r = E.spotSell(ME, s, x.qty * +f, P.spot[s].bid || P.spot[s].last, now(), '시장가 매도'); if (r.ok) { toast(fillMsg(r.fill)); afterTrade(r.fill); } });
-  $$('[data-cf]', body).forEach((b) => b.onclick = () => { const [s, f] = b.dataset.cf.split(':'); const x = ME.fut.pos[s]; const q = P.fut[s]; const r = E.futClose(ME, s, x.qty * +f, x.side === 'long' ? (q.bid || q.mark) : (q.ask || q.mark), now(), '시장가 청산'); if (r.ok) { toast(fillMsg(r.fill)); afterTrade(r.fill); } });
+  $$('[data-cs]', body).forEach((b) => b.onclick = () => { const [s, f] = b.dataset.cs.split(':'); closeNow('spot', s, +f); });
+  $$('[data-cf]', body).forEach((b) => b.onclick = () => { const [s, f] = b.dataset.cf.split(':'); closeNow('fut', s, +f); });
+  $$('[data-close]', body).forEach((b) => b.onclick = () => closeDialog(...b.dataset.close.split(':')));
   $$('[data-edit]', body).forEach((b) => b.onclick = () => editSLTP(...b.dataset.edit.split(':')));
 }
 function afterTrade(f) {
@@ -1067,14 +1194,81 @@ function afterTrade(f) {
   const tr = E.trOf(ME, f.tradeId);
   if (tr && tr.status === 'closed') reviewTrade(tr);
 }
+// ───────────────────────────── 포지션 종료 (바이낸스처럼: 시장가·지정가, 25·50·75·100% 또는 직접)
+function closeNow(mkt, s, frac, why = '시장가 청산') {
+  const x = mkt === 'fut' ? ME.fut.pos[s] : ME.spot.hold[s]; if (!x) return;
+  let r;
+  if (mkt === 'spot') r = E.spotSell(ME, s, x.qty * frac, P.spot[s].bid || P.spot[s].last, now(), why === '시장가 청산' ? '시장가 매도' : why);
+  else { const q = P.fut[s]; r = E.futClose(ME, s, x.qty * frac, x.side === 'long' ? (q.bid || q.mark) : (q.ask || q.mark), now(), why); }
+  if (r && r.ok) { toast(fillMsg(r.fill)); afterTrade(r.fill); } else if (r) toast(r.why);
+}
+async function closeDialog(mkt, s) {
+  const x = mkt === 'fut' ? ME.fut.pos[s] : ME.spot.hold[s]; if (!x) return;
+  const isF = mkt === 'fut', long = !isF || x.side === 'long', entry = x.entry ?? x.avg, cur = pxOf(mkt, s) || entry;
+  const pr = modal(`<b>${s} ${isF ? (long ? '롱' : '숏') + ' 포지션' : '현물'} 종료</b>
+    <div class="seg" id="cType"><button data-t="market" class="on">시장가</button><button data-t="limit">지정가</button></div>
+    <div id="cPriceRow" hidden><div class="lbl">지정 가격 (도달하면 체결 · 대기 주문으로 남음)</div><div class="field"><input id="cPrice" inputmode="decimal" value="${(() => { const t = tickSize(cur); return (Math.round(cur / t) * t).toFixed(Math.max(0, -Math.floor(Math.log10(t) + 1e-9))); })()}"><span>USDT</span></div></div>
+    <div class="lbl">종료할 비율</div>
+    <div class="row"><input type="range" id="cPct" min="1" max="100" value="100" style="flex:1;accent-color:var(--accent)"><div class="field" style="width:90px"><input id="cPctN" value="100"><span>%</span></div></div>
+    <div class="pcts">${[25, 50, 75, 100].map((v) => `<button data-p="${v}">${v}%</button>`).join('')}</div>
+    <div class="calc num" id="cCalc"></div>`, [{ label: '취소', ret: null }, { label: '종료', value: (r) => ({ type: $('#cType .on', r).dataset.t, pct: +$('#cPctN', r).value, price: parseFloat($('#cPrice', r).value) }) }]);
+  const calc = () => {
+    const t = $('#cType .on').dataset.t, pct = Math.max(1, Math.min(100, +$('#cPctN').value || 0)), px = t === 'limit' ? parseFloat($('#cPrice').value) || cur : cur, q = x.qty * pct / 100;
+    const pnl = isF ? (long ? px - entry : entry - px) * q - q * px * (t === 'limit' ? E.FEE.futMaker : E.FEE.futTaker) : q * (px * (1 - E.FEE.spot) - entry);
+    $('#cCalc').innerHTML = `<span class="mute">수량</span><span>${fqty(q)} ${s}</span><span class="mute">${t === 'limit' ? '지정가' : '현재가'} 기준 손익</span><span class="${cls(pnl)}">${fsign(pnl)} USDT${isF ? ` (${fpct(pnl / (x.margin * pct / 100))})` : ''}</span>`;
+  };
+  $$('#cType button').forEach((b) => b.onclick = () => { $$('#cType button').forEach((z) => z.classList.toggle('on', z === b)); $('#cPriceRow').hidden = b.dataset.t !== 'limit'; calc(); });
+  $('#cPct').oninput = () => { $('#cPctN').value = $('#cPct').value; calc(); };
+  $('#cPctN').oninput = () => { $('#cPct').value = $('#cPctN').value; calc(); };
+  $('#cPrice').oninput = calc;
+  $$('[data-p]', $('#modalRoot')).forEach((b) => b.onclick = () => { $('#cPctN').value = $('#cPct').value = b.dataset.p; calc(); });
+  calc();
+  const v = await pr; if (!v) return;
+  const frac = Math.max(0.01, Math.min(1, (v.pct || 100) / 100));
+  if (v.type === 'market') return closeNow(mkt, s, frac);
+  if (!(v.price > 0)) return toast('지정 가격을 넣어 주세요');
+  const x2 = mkt === 'fut' ? ME.fut.pos[s] : ME.spot.hold[s]; if (!x2) return;
+  E.placeOrder(ME, { mkt, sym: s, side: isF ? (long ? 'short' : 'long') : 'sell', type: 'limit', price: v.price, qty: x2.qty * frac, reduce: true, by: 'manual', note: '포지션 종료 (지정가)' }, now());
+  toast(`${s} 지정가 종료 주문 ${fpx(v.price)} · ${Math.round(frac * 100)}%`); save(); renderTabs(); drawLines();
+}
+// 손절·익절: 가격 · 진입가 대비 % · ROE %(선물) 중 골라서
+function sltpPx(x, mkt, kind, mode, val) {
+  if (!(val > 0)) return null;
+  if (mode === 'px') return val;
+  const entry = x.entry ?? x.avg, long = mkt === 'spot' || x.side === 'long', pct = (mode === 'roe' ? val / (x.lev || 1) : val) / 100;
+  const sgn = (kind === 'sl' ? -1 : 1) * (long ? 1 : -1);
+  return entry * (1 + sgn * pct);
+}
 async function editSLTP(mkt, s) {
   const x = mkt === 'fut' ? ME.fut.pos[s] : ME.spot.hold[s]; if (!x) return;
-  const v = await modal(`<b>${s} 손절 · 익절</b><div class="row"><div style="flex:1"><div class="lbl">손절가</div><div class="field"><input id="mSL" value="${x.sl ?? ''}" placeholder="없음"></div></div><div style="flex:1"><div class="lbl">익절가</div><div class="field"><input id="mTP" value="${x.tp ?? ''}" placeholder="없음"></div></div></div><div class="note">비우면 해제. 화면을 닫아 둬도 다음에 열 때 그 사이 캔들로 확인해요.</div>`,
-    [{ label: '취소', ret: null }, { label: '저장', value: (r) => ({ sl: parseFloat($('#mSL', r).value), tp: parseFloat($('#mTP', r).value) }) }]);
-  if (!v) return;
-  x.sl = isFinite(v.sl) && v.sl > 0 ? v.sl : null; x.tp = isFinite(v.tp) && v.tp > 0 ? v.tp : null;
-  const tr = E.trOf(ME, x.tradeId); if (tr && !tr.sl0 && x.sl) { tr.sl0 = x.sl; const q = x.qty; tr.risk = Math.abs((x.entry ?? x.avg) - x.sl) * q; }
-  save(); renderTabBody();
+  const isF = mkt === 'fut', modes = [['px', '가격'], ['pct', '진입가 대비 %'], ...(isF ? [['roe', 'ROE %']] : [])], entry = x.entry ?? x.avg;
+  const blk = (k, lab, val) => `<div class="lbl">${lab}</div><div class="row"><div class="field" style="flex:1"><input id="m${k}" inputmode="decimal" value="${val ?? ''}" placeholder="없음"></div><div class="field" style="width:150px"><select id="m${k}M">${modes.map(([a, b]) => `<option value="${a}">${b}</option>`).join('')}</select></div></div><div class="note" id="m${k}P"></div>`;
+  const pr = modal(`<b>${s} 손절 · 익절</b><div class="note">진입가 ${fpx(entry)}${isF ? ` · ${x.lev.toFixed(1)}배` : ''} · 수량 ${fqty(x.qty)} — % 는 진입가 기준으로 ${'불리한 쪽(손절) · 유리한 쪽(익절)'} 거리</div>
+    ${blk('SL', '손절', x.sl)}${blk('TP', '익절', x.tp)}`,
+    [{ label: '취소', ret: null }, { label: '저장', value: (r) => ({ sl: sltpPx(x, mkt, 'sl', $('#mSLM', r).value, parseFloat($('#mSL', r).value)), tp: sltpPx(x, mkt, 'tp', $('#mTPM', r).value, parseFloat($('#mTP', r).value)) }) }]);
+  const prev = () => {
+    for (const [k, kind] of [['SL', 'sl'], ['TP', 'tp']]) {
+      const p = sltpPx(x, mkt, kind, $(`#m${k}M`).value, parseFloat($(`#m${k}`).value));
+      const pnl = p ? (isF ? (x.side === 'long' ? p - entry : entry - p) * x.qty - x.qty * p * E.FEE.futTaker : x.qty * (p * (1 - E.FEE.spot) - entry)) : null;
+      $(`#m${k}P`).innerHTML = p ? `→ 가격 <b class="num">${fpx(p)}</b> · 닿으면 <span class="num ${cls(pnl)}">${fsign(pnl)} USDT</span>` : '설정 안 함';
+    }
+  };
+  for (const k of ['SL', 'TP']) { $(`#m${k}`).oninput = prev; $(`#m${k}M`).onchange = () => { $(`#m${k}`).value = ''; prev(); }; }
+  prev();
+  const v = await pr; if (!v) return;
+  const cur = pxOf(mkt, s), long = mkt === 'spot' || x.side === 'long';
+  if (v.sl && cur && (long ? v.sl >= cur : v.sl <= cur)) return toast(`손절가 ${fpx(v.sl)} 는 현재가 ${long ? '아래' : '위'}여야 해요`);
+  if (v.tp && cur && (long ? v.tp <= cur : v.tp >= cur)) return toast(`익절가 ${fpx(v.tp)} 는 현재가 ${long ? '위' : '아래'}여야 해요`);
+  x.sl = v.sl > 0 ? v.sl : null; x.tp = v.tp > 0 ? v.tp : null;
+  const tr = E.trOf(ME, x.tradeId); if (tr && !tr.sl0 && x.sl) { tr.sl0 = x.sl; tr.risk = Math.abs(entry - x.sl) * x.qty; }
+  save(); renderTabBody(); drawLines(); if (mc) { mc.ov._last = null; paintOverlay(); }
+}
+// 주문창의 손절·익절 칸: 가격 또는 진입가 대비 % (cfg.sltpPct)
+function formSLTP(side, px) {
+  const a = numIn('fSL'), b = numIn('fTP');
+  if (!cfg.sltpPct || !px) return { sl: a, tp: b };
+  const sg = side === 'buy' || side === 'long' ? 1 : -1;
+  return { sl: a ? px * (1 - sg * a / 100) : null, tp: b ? px * (1 + sg * b / 100) : null };
 }
 function tabOrd(body, st) {
   const os = st.orders.filter((o) => o.status === 'open').concat(st.orders.filter((o) => o.status !== 'open').slice(-20).reverse());
@@ -1488,7 +1682,7 @@ function bind() {
   const closeSet = () => { $('#setDrawer').hidden = true; };
   $('#gearBtn').onclick = openSet; $('#setClose').onclick = closeSet;
   $('#setDrawer').addEventListener('pointerdown', (e) => { if (e.target.id === 'setDrawer') closeSet(); });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeSet(); toggleIndPop(false); } });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeSet(); toggleIndPop(false); if (mc && mc.meas) { mc.meas = null; paintOverlay(); } if (ui.draw) { ui.draw = null; ui.drawA = null; renderChartBar(); } } });
   if (!ghOn()) setTimeout(() => toast('기록을 기기 사이에 맞추려면 오른쪽 위 ⚙ 설정에서 GitHub 를 연결하세요', 7000), 1500);
   $$('#pnav button').forEach((b) => b.onclick = () => { const p = b.dataset.page; if (p === ui.page) return; history.pushState(null, '', p === 'trade' ? location.pathname + location.search : '#' + p); setPage(p); });
   window.addEventListener('popstate', () => setPage(location.hash.slice(1) || 'trade'));
