@@ -55,6 +55,8 @@ const fqty = (x) => x == null ? '–' : x >= 1000 ? x.toLocaleString('en-US', { 
 const cls = (x) => x > 0 ? 'up' : x < 0 ? 'dn' : '';
 const ftime = (t) => { if (!t) return '–'; const d = new Date(t); const p = (n) => String(n).padStart(2, '0'); return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
 const unit = () => 'USDT';
+const isPhone = () => matchMedia('(max-width: 760px)').matches;   // 폰: 차트 누르기로 가격 넣지 않음, 키보드 안 띄움
+const CHART_TIP = () => isPhone() ? '가격은 주문창 왼쪽 호가를 눌러 넣어요' : '차트를 누르면 그 가격이 주문창에 들어가요';
 const futPx = (q) => q.mark > 0 ? q.mark : q.last > 0 ? q.last : (q.bid > 0 && q.ask > 0 ? (q.bid + q.ask) / 2 : undefined);
 const pxOf = (mkt, s) => mkt === 'fut' ? futPx(P.fut[s]) : P.spot[s].last;
 const prices = () => ({ spot: Object.fromEntries(SYMS.map((s) => [s, P.spot[s].last])), fut: Object.fromEntries(SYMS.map((s) => [s, futPx(P.fut[s])])) });
@@ -381,7 +383,7 @@ function renderChartBar() {
     <label><input type="checkbox" id="indMa" ${I.ma ? 'checked' : ''}>이평 20</label><label><input type="checkbox" id="indBb" ${I.bb ? 'checked' : ''}>볼린저</label><label><input type="checkbox" id="indVol" ${I.vol !== false ? 'checked' : ''}>거래량</label>
     <div class="seg" id="subSeg">${SUBS.map(([k, v]) => `<button data-sub="${k}" class="${(I.sub || '') === k ? 'on' : ''}">${v}</button>`).join('')}</div>
     <div class="seg" id="drawSeg"><button data-d="h" class="drawbtn ${ui.draw === 'h' ? 'on' : ''}" title="차트를 누른 가격에 수평선">─ 수평선</button><button data-d="t" class="drawbtn ${ui.draw === 't' ? 'on' : ''}" title="두 점을 눌러 추세선 (오른쪽으로 연장)">╱ 추세선</button><button data-d="undo" title="마지막 선 지우기">↶</button><button data-d="clear" title="이 종목의 내 선 모두 지우기">지우기</button></div>
-    <span class="note" id="chartNote">${ui.draw === 'h' ? '수평선을 그을 가격을 누르세요' : ui.draw === 't' ? (ui.drawA ? '두 번째 점을 누르세요' : '추세선 첫 점을 누르세요') : '차트를 누르면 그 가격이 주문창에 들어가요'}</span>` : '<span class="note">지표·그리기는 트레이딩뷰 · 내 진입선·내 선은 포지션 차트에서</span>'}`;
+    <span class="note" id="chartNote">${ui.draw === 'h' ? '수평선을 그을 가격을 누르세요' : ui.draw === 't' ? (ui.drawA ? '두 번째 점을 누르세요' : '추세선 첫 점을 누르세요') : CHART_TIP()}</span>` : '<span class="note">지표·그리기는 트레이딩뷰 · 내 진입선·내 선은 포지션 차트에서</span>'}`;
   $$('#chartSeg button').forEach((b) => b.onclick = () => { cfg.chart = b.dataset.c; saveCfg(); mountChart(); });
   $$('#ivSeg button').forEach((b) => b.onclick = () => { cfg.myIv = b.dataset.iv; saveCfg(); mountChart(); });
   $$('#subSeg button').forEach((b) => b.onclick = () => { cfg.myInd.sub = b.dataset.sub; saveCfg(); mountChart(); });
@@ -438,7 +440,7 @@ function mountChart() {
       if (Math.abs(t - ui.drawA[0]) < ivSec(cfg.myIv)) { toast('같은 봉이에요 — 다른 봉을 눌러 주세요'); return; }
       addDrawing({ k: 't', a: ui.drawA, b: [t, px] }); ui.draw = null; ui.drawA = null; renderChartBar(); return;
     }
-    if (!readOnly()) setPriceField(px);
+    if (!readOnly() && !isPhone()) setPriceField(px);
   });
   loadBars();
 }
@@ -451,7 +453,7 @@ async function binanceBars(s, iv, spot) {
 async function loadBars() {
   if (!mc) return;
   const key = mc.key, [mk, s, iv] = key.split(':');
-  let bars = [], note = '차트를 누르면 그 가격이 주문창에 들어가요';
+  let bars = [], note = CHART_TIP();
   try { bars = await binanceBars(s, iv, mk === 'spot'); }
   catch { note = '과거 시세를 불러오지 못했어요 — 30초 뒤 다시 시도'; setTimeout(() => { if (mc && mc.key === key) loadBars(); }, 30000); }
   if (!mc || mc.key !== key) return;
@@ -563,12 +565,16 @@ function tickSize(px) {     // 바이낸스 호가 단위 (대략): 선물 BTC 0
 function setPriceField(px, exact) {     // exact = 호가창에서 누른 가격 (이미 호가 단위라 그대로)
   if (exact) {
     if (ui.otype === 'market') { ui.otype = 'limit'; renderForm(); }
-    const f = $('#fPrice'); if (f) { f.value = String(px); updateCalc(); f.focus(); }
+    const f = $('#fPrice'); if (f) { f.value = String(px); updateCalc(); if (!isPhone()) f.focus(); flash(f); }
     return;
   }
   const t = tickSize(px), v = Math.round(px / t) * t, d = Math.max(0, -Math.floor(Math.log10(t) + 1e-9));
   if (ui.otype === 'market') { ui.otype = 'limit'; renderForm(); }
-  const f = $('#fPrice'); if (f) { f.value = v.toFixed(d); updateCalc(); f.focus(); }
+  const f = $('#fPrice'); if (f) { f.value = v.toFixed(d); updateCalc(); if (!isPhone()) f.focus(); flash(f); }
+}
+function flash(el) {     // 값이 들어갔다는 표시 (키보드 없이도 알 수 있게)
+  const box = el.closest('.field') || el; box.style.transition = 'box-shadow .15s'; box.style.boxShadow = '0 0 0 2px var(--accent)';
+  setTimeout(() => { box.style.boxShadow = ''; }, 350);
 }
 
 // ───────────────────────────── 위쪽 띠 · 종목
@@ -614,6 +620,13 @@ function paintOB() {
   $('#ob').innerHTML = `<table>${asks.slice().reverse().map((x) => row(x, 'a')).join('')}</table>
     <div class="mid num ${cls(q.chg)}">${fpx(px, mk)} <span style="font-size:12px">${fpct(q.chg)}</span>${mk === 'fut' && q.funding != null ? `<div class="mute" style="font-size:11px">펀딩 ${fpct(q.funding, 4)} · ${ftime(q.nextFunding)}</div>` : ''}</div>
     <table>${bids.map((x) => row(x, 'b')).join('')}</table>`;
+  const mini = $('#obMini');
+  if (mini && mini.offsetParent) {
+    const N = 7, mr = (x, side) => `<tr data-obpx="${x[0]}"><td><span class="num ${side === 'a' ? 'dn' : 'up'}">${fpx(x[0], mk)}</span></td><td class="num">${fqty(x[1])}</td></tr>`;
+    mini.innerHTML = `<table>${asks.slice(0, N).reverse().map((x) => mr(x, 'a')).join('')}</table>
+      <div class="mid num ${cls(q.chg)}">${fpx(px, mk)}<div style="font-size:11px">${fpct(q.chg)}</div></div>
+      <table>${bids.slice(0, N).map((x) => mr(x, 'b')).join('')}</table>${asks.length ? '' : '<div class="note" style="padding:8px">호가 연결 중…</div>'}`;
+  }
 }
 
 // ───────────────────────────── 주문창
@@ -1175,10 +1188,11 @@ function bind() {
   $$('#acctSeg button').forEach((b) => b.onclick = () => { ui.acct = b.dataset.acct; $$('#acctSeg button').forEach((x) => x.classList.toggle('on', x === b)); renderAll(); });
   $$('#mktSeg button').forEach((b) => b.onclick = () => { ui.mkt = b.dataset.mkt; if (ui.mkt === 'fut') ui.side = 'buy'; $$('#mktSeg button').forEach((x) => x.classList.toggle('on', x === b)); renderAll(); mountChart(); });
   matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => { if (cfg.theme === 'system') mountChart(); });
-  $('#ob').addEventListener('pointerdown', (e) => {     // 호가는 0.5초마다 다시 그려져서 click 이 끊길 수 있음 → 누르는 순간 반영
+  for (const id of ['#ob', '#obMini']) $(id).addEventListener('pointerdown', (e) => {     // 호가는 0.5초마다 다시 그려져서 click 이 끊길 수 있음 → 누르는 순간 반영
     const tr = e.target.closest('[data-obpx]'); if (!tr || readOnly()) return;
     e.preventDefault(); setPriceField(tr.dataset.obpx, true);
   });
+  matchMedia('(max-width: 760px)').addEventListener?.('change', () => { paintOB(); renderChartBar(); });
   $$('#pnav button').forEach((b) => b.onclick = () => { const p = b.dataset.page; if (p === ui.page) return; history.pushState(null, '', p === 'trade' ? location.pathname + location.search : '#' + p); setPage(p); });
   window.addEventListener('popstate', () => setPage(location.hash.slice(1) || 'trade'));
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && caughtUp) { caughtUp = false; catchUpAll(); } });
