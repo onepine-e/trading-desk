@@ -1,7 +1,7 @@
 /* 트레이딩 데스크 — 화면 · 시세 · 저장 (engine.js 의 DeskEngine 사용) */
 'use strict';
 const E = window.DeskEngine;
-const SYMS = E.SYMS;
+const DEF_SYMS = ['BTC', 'ETH', 'XRP', 'SOL', 'DOGE', 'ADA', 'LINK', 'NEAR'];
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -16,7 +16,23 @@ const LS = {
 const cfg = Object.assign({ owner: '', repo: 'tsb7-paper', branch: 'main', token: '', theme: 'system', interval: '240',
   studies: ['MASimple@tv-basicstudies', 'BB@tv-basicstudies', 'RSI@tv-basicstudies'], chart: 'my', myIv: '240', myInd: { ma: true, bb: true } }, LS.get('desk.cfg', {}));
 const saveCfg = () => LS.set('desk.cfg', cfg);
-let ME = LS.get('desk.me', null) || E.newAccount();
+const SYMS = (Array.isArray(cfg.syms) && cfg.syms.length ? cfg.syms : DEF_SYMS).filter((x) => /^[A-Z0-9]{2,12}$/.test(x));
+let migratedNote = false;
+// v2: 현물을 업비트 원화 → 바이낸스 USDT 로. 예전 계좌는 선물 기록은 살리고 현물만 1만 USDT 로 새로 시작
+function migrateMe(m) {
+  if (m && m.schema >= E.SCHEMA) return m;
+  const n = E.newAccount();
+  if (m) {
+    LS.set('desk.me.v1', m);
+    Object.assign(n, { created: m.created || n.created, setups: m.setups || n.setups, fut: m.fut || n.fut, funding: m.funding || [], lastFunding: m.lastFunding || {},
+      trades: (m.trades || []).filter((x) => x.mkt === 'fut'), fills: (m.fills || []).filter((x) => x.mkt === 'fut'), orders: (m.orders || []).filter((x) => x.mkt === 'fut'),
+      seen: Object.fromEntries(Object.entries(m.seen || {}).filter(([k]) => k.startsWith('fut:'))), migrated: Date.now() });
+    n.init.usdt = m.init?.usdt ?? n.init.usdt;
+    migratedNote = true;
+  }
+  return n;
+}
+let ME = migrateMe(LS.get('desk.me', null));
 let ME_SHA = LS.get('desk.me.sha', null);
 let CL = null, BRIEFS = [], BRIEF_TXT = {}, BOT = null;
 const ui = { acct: 'me', mkt: 'spot', sym: 'BTC', tab: 'pos', side: 'buy', otype: 'market', lev: 10, statMkt: 'fut', brief: null };
@@ -25,19 +41,19 @@ for (const s of SYMS) { P.spot[s] = {}; P.fut[s] = {}; }
 let caughtUp = false, catchFail = false, btcFilter = null;
 
 // ───────────────────────────── 형식
-function fpx(x, mkt) {
+function fpx(x) {     // 가격 (USDT): 100 이상 소수 둘째 · 1 이상 넷째 · 그 아래 다섯째
   if (x == null || !isFinite(x)) return '–';
-  if (mkt === 'fut') return x >= 1000 ? x.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
-    : x >= 10 ? x.toFixed(2) : x >= 1 ? x.toFixed(4) : x.toFixed(5);
-  return x >= 100 ? Math.round(x).toLocaleString('ko-KR') : x >= 1 ? x.toFixed(2) : x.toPrecision(4);
+  const a = Math.abs(x);
+  return a >= 100 ? x.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : a >= 1 ? x.toFixed(4) : x.toFixed(5);
 }
-const fmoney = (x, mkt) => x == null || !isFinite(x) ? '–' : mkt === 'fut' ? x.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : Math.round(x).toLocaleString('ko-KR');
+const fmoney = (x) => x == null || !isFinite(x) ? '–' : x.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fkrw = (x) => x == null || !isFinite(x) ? '–' : Math.round(x).toLocaleString('ko-KR');
 const fsign = (x, mkt) => x == null || !isFinite(x) ? '–' : (x > 0 ? '+' : '') + fmoney(x, mkt);
 const fpct = (x, d = 2) => x == null || !isFinite(x) ? '–' : (x > 0 ? '+' : '') + (x * 100).toFixed(d) + '%';
 const fqty = (x) => x == null ? '–' : x >= 1000 ? x.toLocaleString('en-US', { maximumFractionDigits: 2 }) : x >= 1 ? x.toFixed(4) : x.toPrecision(5);
 const cls = (x) => x > 0 ? 'up' : x < 0 ? 'dn' : '';
 const ftime = (t) => { if (!t) return '–'; const d = new Date(t); const p = (n) => String(n).padStart(2, '0'); return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
-const unit = (mkt) => mkt === 'fut' ? 'USDT' : '원';
+const unit = () => 'USDT';
 const futPx = (q) => q.mark > 0 ? q.mark : q.last > 0 ? q.last : (q.bid > 0 && q.ask > 0 ? (q.bid + q.ask) / 2 : undefined);
 const pxOf = (mkt, s) => mkt === 'fut' ? futPx(P.fut[s]) : P.spot[s].last;
 const prices = () => ({ spot: Object.fromEntries(SYMS.map((s) => [s, P.spot[s].last])), fut: Object.fromEntries(SYMS.map((s) => [s, futPx(P.fut[s])])) });
@@ -143,7 +159,7 @@ async function loadBot() {
   return out;
 }
 
-// ───────────────────────────── 시세 (업비트 · 바이낸스 선물)
+// ───────────────────────────── 시세 (바이낸스 현물 · 바이낸스 선물)
 const tickGate = {};
 function onTick(mkt, s, px) {
   if (!(px > 0)) return;
@@ -163,36 +179,47 @@ let feedOk = { spot: false, fut: false };
 function setFeed() {
   const s = $('#feedStat'), a = feedOk.spot, b = feedOk.fut;
   s.querySelector('.dot').className = 'dot ' + (a && b ? 'ok' : a || b ? 'wait' : 'bad');
-  s.querySelector('span:last-child').textContent = a && b ? '실시간 시세' : `시세: 업비트 ${a ? '○' : '×'} · 바이낸스 ${b ? '○' : '×'}`;
+  s.querySelector('span:last-child').textContent = a && b ? '실시간 시세' : `시세: 현물 ${a ? '○' : '×'} · 선물 ${b ? '○' : '×'}`;
 }
-function upbitWS(delay = 1000) {
+let spotSeenWS = 0;
+function spotWS(delay = 1000) {
+  const st = SYMS.flatMap((x) => { x = x.toLowerCase() + 'usdt'; return [`${x}@ticker`, `${x}@bookTicker`, `${x}@depth10@1000ms`]; });
   let ws;
-  try { ws = new WebSocket('wss://api.upbit.com/websocket/v1'); } catch { return setTimeout(() => upbitWS(delay * 2), delay); }
-  ws.binaryType = 'arraybuffer';
-  ws.onopen = () => {
-    const codes = SYMS.map((s) => 'KRW-' + s);
-    ws.send(JSON.stringify([{ ticket: 'desk-' + Math.random().toString(36).slice(2) }, { type: 'ticker', codes }, { type: 'orderbook', codes }, { format: 'DEFAULT' }]));
-    feedOk.spot = true; setFeed(); delay = 1000;
-  };
+  try { ws = new WebSocket('wss://stream.binance.com:9443/stream?streams=' + st.join('/')); } catch { return setTimeout(() => spotWS(delay * 2), delay); }
+  ws.onopen = () => { feedOk.spot = true; setFeed(); delay = 1000; };
   ws.onmessage = (e) => {
-    let m; try { m = JSON.parse(typeof e.data === 'string' ? e.data : new TextDecoder().decode(e.data)); } catch { return; }
-    const s = (m.code || '').replace('KRW-', '');
-    if (!P.spot[s]) return;
-    if (m.type === 'ticker') {
-      Object.assign(P.spot[s], { last: m.trade_price, chg: m.signed_change_rate, high: m.high_price, low: m.low_price, vol: m.acc_trade_price_24h });
-      onTick('spot', s, m.trade_price); paintTick('spot', s);
-    } else if (m.type === 'orderbook') {
-      const u = m.orderbook_units || [];
-      P.spot[s].asks = u.map((x) => [x.ask_price, x.ask_size]); P.spot[s].bids = u.map((x) => [x.bid_price, x.bid_size]);
-      if (u[0]) { P.spot[s].ask = u[0].ask_price; P.spot[s].bid = u[0].bid_price; }
+    let m; try { m = JSON.parse(e.data); } catch { return; }
+    const d = m.data || {}, str = m.stream || '', s = str.split('@')[0].toUpperCase().replace(/USDT$/, '');
+    const q = P.spot[s]; if (!q) return;
+    if (str.endsWith('@ticker')) {
+      spotSeenWS = now();
+      Object.assign(q, { last: +d.c, chg: +d.P / 100, high: +d.h, low: +d.l, vol: +d.q });
+      onTick('spot', s, +d.c); paintTick('spot', s);
+    } else if (str.endsWith('@bookTicker')) { q.bid = +d.b; q.ask = +d.a; }
+    else if (str.includes('@depth')) {
+      q.asks = (d.asks || []).map((x) => [+x[0], +x[1]]); q.bids = (d.bids || []).map((x) => [+x[0], +x[1]]);
       if (ui.mkt === 'spot' && ui.sym === s) paintOB();
     }
   };
-  ws.onclose = () => { feedOk.spot = false; setFeed(); setTimeout(() => upbitWS(Math.min(delay * 2, 30000)), delay); };
+  ws.onclose = () => { feedOk.spot = false; setFeed(); setTimeout(() => spotWS(Math.min(delay * 2, 30000)), delay); };
   ws.onerror = () => ws.close();
 }
+// 현물 웹소켓이 조용하면 3초마다 REST 로 시세
+async function pollSpot() {
+  if (document.visibilityState === 'hidden' || now() - spotSeenWS < 5000) return;
+  try {
+    const r = await fetch('https://api.binance.com/api/v3/ticker/24hr?symbols=' + encodeURIComponent(JSON.stringify(SYMS.map((x) => x + 'USDT'))), { cache: 'no-store' });
+    if (!r.ok) throw new Error(r.status);
+    for (const d of await r.json()) {
+      const s = d.symbol.replace(/USDT$/, ''), q = P.spot[s]; if (!q) continue;
+      Object.assign(q, { last: +d.lastPrice, chg: +d.priceChangePercent / 100, high: +d.highPrice, low: +d.lowPrice, vol: +d.quoteVolume, bid: +d.bidPrice || q.bid, ask: +d.askPrice || q.ask });
+      onTick('spot', s, +d.lastPrice); paintTick('spot', s);
+    }
+    feedOk.spot = true; setFeed();
+  } catch { /* 다음에 */ }
+}
 const lastFundT = {}, lastFundR = {};
-let markSeenWS = 0, restFutOk = null, restUpbitOk = null;
+let markSeenWS = 0, restFutOk = null;
 function handleMark(s, mark, T, r) {
   if (!(mark > 0) || !P.fut[s]) return;
   if (lastFundT[s] && T > lastFundT[s] && caughtUp && ME.fut.pos[s]) {      // 펀딩 시각이 지남 → 직전 비율로 정산
@@ -249,32 +276,17 @@ function binanceWS(delay = 1000) {
 
 // ───────────────────────────── 놓친 구간 (화면을 닫아 둔 동안)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-async function upbitCandles(s, from, unitMin) {
-  const out = []; let to = null;
-  for (let k = 0; k < 60; k++) {
-    const q = `market=KRW-${s}&count=200` + (to ? `&to=${encodeURIComponent(to)}` : '');
-    const r = await fetch(`https://api.upbit.com/v1/candles/minutes/${unitMin}?${q}`);
-    if (!r.ok) throw new Error('업비트 ' + r.status);
-    const a = await r.json();
-    if (!a.length) break;
-    for (const x of a) out.push({ t: Date.parse(x.candle_date_time_utc + 'Z'), o: x.opening_price, h: x.high_price, l: x.low_price, c: x.trade_price, dur: unitMin * 60000 });
-    const oldest = Date.parse(a[a.length - 1].candle_date_time_utc + 'Z');
-    if (oldest <= from) break;
-    to = new Date(oldest).toISOString().replace('.000Z', 'Z');
-    await sleep(130);
-  }
-  return out.filter((c) => c.t + c.dur > from).sort((a, b) => a.t - b.t);
-}
-async function binanceCandles(s, from, iv) {
+async function binanceCandles(s, from, iv, spot) {
   const out = []; let start = from - (iv === '5m' ? FIVE : 3600000);
+  const lim = spot ? 1000 : 1500, base = spot ? 'https://api.binance.com/api/v3/klines' : 'https://fapi.binance.com/fapi/v1/klines';
   for (let k = 0; k < 40; k++) {
-    const r = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${s}USDT&interval=${iv}&startTime=${start}&limit=1500`);
+    const r = await fetch(`${base}?symbol=${s}USDT&interval=${iv}&startTime=${start}&limit=${lim}`);
     if (!r.ok) throw new Error('바이낸스 ' + r.status);
     const a = await r.json();
     if (!a.length) break;
     for (const x of a) out.push({ t: x[0], o: +x[1], h: +x[2], l: +x[3], c: +x[4], dur: x[6] + 1 - x[0] });
     start = a[a.length - 1][0] + 1;
-    if (a.length < 1500) break;
+    if (a.length < lim) break;
   }
   return out.filter((c) => c.t + c.dur > from);
 }
@@ -290,7 +302,7 @@ async function catchUpAll() {
       const from = ME.seen[`${mkt}:${s}`] || ME.updated || t;
       if (t - from < 60000) continue;
       const days = (t - from) / 864e5;
-      candles[mkt][s] = mkt === 'spot' ? await upbitCandles(s, from, days > 3 ? 60 : 5) : await binanceCandles(s, from, days > 5 ? '1h' : '5m');
+      candles[mkt][s] = await binanceCandles(s, from, days > 5 ? '1h' : '5m', mkt === 'spot');
       n += candles[mkt][s].length;
     }
     const ev = E.catchUp(ME, candles, t);
@@ -301,7 +313,8 @@ async function catchUpAll() {
     save();
   } catch (e) {
     caughtUp = true; catchFail = true;
-    toast(`놓친 구간 확인 실패 (${esc(e.message)}) — 지금부터의 실시간 체결만 반영해요. 다음에 열 때 다시 확인합니다.`, 9000);
+    toast(`놓친 구간 확인이 잠시 실패했어요 (${esc(e.message)}) — 1분 뒤 다시 확인해요. 그동안 실시간 체결은 그대로 반영돼요.`, 7000);
+    setTimeout(() => { if (catchFail) { caughtUp = false; catchUpAll(); } }, 60000);
   }
   renderTabs(); renderForm();
 }
@@ -312,20 +325,15 @@ async function fundingCatchUp(s) {
   if (!r.ok) return;
   for (const x of await r.json()) E.applyFunding(ME, s, x.fundingTime, +x.fundingRate, +x.markPrice || p.entry);
 }
-async function loadBtcFilter() {
+async function loadBtcFilter() {     // BTC 4시간봉 종가 > 직전 300봉(50일) 평균 (바이낸스 현물 BTCUSDT, 마감된 봉만)
   try {
-    const a = []; let to = null;
-    for (let k = 0; k < 2; k++) {
-      const r = await fetch('https://api.upbit.com/v1/candles/minutes/240?market=KRW-BTC&count=200' + (to ? '&to=' + encodeURIComponent(to) : ''));
-      const j = await r.json(); a.push(...j); to = j[j.length - 1].candle_date_time_utc + 'Z';
-    }
-    const closed = a.filter((x) => Date.parse(x.candle_date_time_utc + 'Z') + 4 * 3600000 <= now()).sort((x, y) => x.timestamp - y.timestamp).map((x) => x.trade_price);
-    const last = closed.slice(-300), sma = last.reduce((s, x) => s + x, 0) / last.length, c = last[last.length - 1];
-    btcFilter = { on: c > sma, gap: c / sma - 1 };
-    restUpbitOk = true;
+    const r = await fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=4h&limit=302');
+    if (!r.ok) throw new Error(r.status);
+    const closed = (await r.json()).filter((x) => x[6] < now()).map((x) => +x[4]);
+    const last = closed.slice(-300), sma = last.reduce((a, x) => a + x, 0) / last.length, c = last[last.length - 1];
+    btcFilter = { on: c > sma, gap: c / sma - 1, src: '바이낸스' };
   } catch {
-    restUpbitOk = false;
-    try { const m = ghOn() ? (await ghJSON('desk/market.json')).data : null; btcFilter = m?.btc_filter ? { on: m.btc_filter.on, gap: m.btc_filter.gap, src: '봇' } : null; } catch { btcFilter = null; }
+    try { const m = ghOn() ? (await ghJSON('desk/market.json')).data : null; btcFilter = m?.btc_filter ? { on: m.btc_filter.on, gap: m.btc_filter.gap, src: '봇 스냅샷' } : null; } catch { btcFilter = null; }
   }
   renderTop();
 }
@@ -336,7 +344,7 @@ function mountTV() {
   if (typeof TradingView === 'undefined') { box.innerHTML = '<div class="empty">트레이딩뷰 차트를 불러오지 못했어요 (광고 차단기·네트워크 확인)</div>'; return; }
   const dark = document.documentElement.dataset.theme === 'dark' || (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);
   new TradingView.widget({
-    autosize: true, container_id: 'tv', symbol: ui.mkt === 'fut' ? `BINANCE:${ui.sym}USDT.P` : `UPBIT:${ui.sym}KRW`,
+    autosize: true, container_id: 'tv', symbol: ui.mkt === 'fut' ? `BINANCE:${ui.sym}USDT.P` : `BINANCE:${ui.sym}USDT`,
     interval: cfg.interval, timezone: 'Asia/Seoul', theme: dark ? 'dark' : 'light', style: '1', locale: 'kr',
     allow_symbol_change: true, hide_side_toolbar: false, withdateranges: true, studies: cfg.studies, save_image: false,
   });
@@ -380,17 +388,6 @@ function mountChart() {
   chart.subscribeClick((p) => { if (!p.point || readOnly() || !mc) return; const px = mc.cs.coordinateToPrice(p.point.y); if (px > 0) setPriceField(px); });
   loadBars();
 }
-async function upbitBars(s, iv) {
-  const path = iv === 'D' ? 'days' : `minutes/${iv}`; const out = []; let to = null;
-  for (let k = 0; k < 2; k++) {
-    const r = await fetch(`https://api.upbit.com/v1/candles/${path}?market=KRW-${s}&count=200` + (to ? `&to=${encodeURIComponent(to)}` : ''));
-    if (!r.ok) throw new Error('업비트 ' + r.status);
-    const a = await r.json(); if (!a.length) break;
-    for (const x of a) out.push({ t: Date.parse(x.candle_date_time_utc + 'Z') / 1000, o: x.opening_price, h: x.high_price, l: x.low_price, c: x.trade_price, v: x.candle_acc_trade_price });
-    to = a[a.length - 1].candle_date_time_utc + 'Z'; await sleep(120);
-  }
-  return out.sort((a, b) => a.t - b.t).filter((x, i, A) => !i || x.t !== A[i - 1].t);
-}
 const BIV = { 15: '15m', 60: '1h', 240: '4h', D: '1d' };
 async function binanceBars(s, iv, spot) {
   const r = await fetch(spot ? `https://api.binance.com/api/v3/klines?symbol=${s}USDT&interval=${BIV[iv]}&limit=400` : `https://fapi.binance.com/fapi/v1/klines?symbol=${s}USDT&interval=${BIV[iv]}&limit=400`);
@@ -401,13 +398,8 @@ async function loadBars() {
   if (!mc) return;
   const key = mc.key, [mk, s, iv] = key.split(':');
   let bars = [], note = '차트를 누르면 그 가격이 주문창에 들어가요';
-  try { bars = mk === 'fut' ? await binanceBars(s, iv) : await upbitBars(s, iv); }
-  catch (e) {
-    if (mk === 'spot') {
-      try { const b = await binanceBars(s, iv, true); const k = P.spot[s].last / b[b.length - 1].c; bars = b.map((x) => ({ ...x, o: x.o * k, h: x.h * k, l: x.l * k, c: x.c * k, v: x.v * k })); note = '업비트 과거 시세를 못 받아 바이낸스 가격을 원화로 환산해 그렸어요 (선은 정확)'; }
-      catch { note = '과거 시세를 불러오지 못했어요 — 지금부터 들어오는 시세로만 그려요'; }
-    } else note = '과거 시세를 불러오지 못했어요';
-  }
+  try { bars = await binanceBars(s, iv, mk === 'spot'); }
+  catch { note = '과거 시세를 불러오지 못했어요 — 30초 뒤 다시 시도'; setTimeout(() => { if (mc && mc.key === key) loadBars(); }, 30000); }
   if (!mc || mc.key !== key) return;
   mc.bars = bars;
   mc.cs.setData(bars.map((b) => ({ time: b.t + KSTS, open: b.o, high: b.h, low: b.l, close: b.c })));
@@ -473,10 +465,12 @@ function renderTop() {
   if (!st) { $('#eqSpot').textContent = '–'; $('#eqFut').textContent = '–'; }
   else {
     const eq = E.equity(st, prices());
-    $('#eqSpot').innerHTML = `${fmoney(eq.spot)} <span class="${cls(eq.spot - st.init.krw)}" style="font-size:12px">${fpct(eq.spot / st.init.krw - 1)}</span>`;
+    const i0 = st.init.spot ?? st.init.krw;
+    $('#eqSpot').innerHTML = `${fmoney(eq.spot)} <span class="${cls(eq.spot - i0)}" style="font-size:12px">${fpct(eq.spot / i0 - 1)}</span>`;
     $('#eqFut').innerHTML = `${fmoney(eq.fut, 'fut')} <span class="${cls(eq.fut - st.init.usdt)}" style="font-size:12px">${fpct(eq.fut / st.init.usdt - 1)}</span>`;
   }
   $('#btcF').innerHTML = btcFilter ? `<span class="${btcFilter.on ? 'up' : 'dn'}">${btcFilter.on ? '켜짐' : '꺼짐'}</span> <span class="num mute" style="font-size:12px">${fpct(btcFilter.gap, 1)}</span>` : '–';
+  $('#btcF').title = btcFilter ? `BTC 4시간봉 종가 vs 50일 평균 · ${btcFilter.src}` : '';
 }
 function renderChips() {
   $('#chips').innerHTML = SYMS.map((s) => `<button class="chip ${s === ui.sym ? 'on' : ''}" data-sym="${s}"><b>${s}</b><span class="num" data-px="${s}">–</span><span class="num" data-chg="${s}"></span></button>`).join('');
@@ -498,7 +492,7 @@ function paintTick(mkt, s) {
 }
 function paintOB() {
   const q = P[ui.mkt][ui.sym], mk = ui.mkt;
-  $('#obSym').textContent = `${ui.sym} · ${mk === 'fut' ? 'USDT 무기한' : 'KRW'}`;
+  $('#obSym').textContent = `${ui.sym} · ${mk === 'fut' ? 'USDT 무기한' : 'USDT 현물'}`;
   const asks = (q.asks || []).slice(0, 10), bids = (q.bids || []).slice(0, 10);
   const mx = Math.max(1e-12, ...asks.map((x) => x[1]), ...bids.map((x) => x[1]));
   const row = (x, side) => `<tr data-obpx="${x[0]}" title="이 가격으로 지정가"><td><span class="num ${side === 'a' ? 'dn' : 'up'}">${fpx(x[0], mk)}</span></td><td><i class="bar-${side}" style="width:${(x[1] / mx * 100).toFixed(1)}%"></i><span class="num">${fqty(x[1])}</span></td></tr>`;
@@ -526,8 +520,8 @@ function renderForm() {
   const typeSeg = `<div class="seg" id="typeSeg" style="display:grid;grid-template-columns:repeat(3,1fr)">${[['market', '시장가'], ['limit', '지정가'], ['stop', '조건']].map(([k, v]) => `<button data-t="${k}" class="${ui.otype === k ? 'on' : ''}">${v}</button>`).join('')}</div>`;
   const priceF = ui.otype === 'market' ? '' : `<div><div class="lbl">${ui.otype === 'stop' ? '조건 가격 (돌파 시 매수·롱 / 이탈 시 매도·숏)' : '지정 가격'}</div><div class="field"><input id="fPrice" inputmode="decimal" value="${px ? fpx(px, mk).replace(/,/g, '') : ''}"><span>${unit(mk)}</span></div></div>`;
   const amtLbl = isFut ? '증거금' : buy ? '주문 금액' : '매도 수량';
-  const amtUnit = isFut ? 'USDT' : buy ? '원' : s;
-  const avail = isFut ? `가능 ${fmoney(ME.fut.wallet, 'fut')} USDT` : buy ? `가능 ${fmoney(ME.spot.cash)} 원` : `보유 ${fqty(holdQty)} ${s}`;
+  const amtUnit = isFut || buy ? 'USDT' : s;
+  const avail = isFut ? `가능 ${fmoney(ME.fut.wallet)} USDT` : buy ? `가능 ${fmoney(ME.spot.cash)} USDT` : `보유 ${fqty(holdQty)} ${s}`;
   const levF = isFut ? `<div><div class="row" style="justify-content:space-between"><span class="lbl">레버리지 (격리)</span><span class="num acc" id="levTxt">${ui.lev}x</span></div><div class="lev"><input type="range" id="fLev" min="1" max="100" value="${ui.lev}"><div class="field" style="width:70px"><input id="fLevN" inputmode="numeric" value="${ui.lev}"><span>x</span></div></div></div>` : '';
   const entry = isFut || buy;
   const sltp = entry ? `<div class="row"><div style="flex:1"><div class="lbl">손절가 (선택)</div><div class="field"><input id="fSL" inputmode="decimal" placeholder="없음"></div></div><div style="flex:1"><div class="lbl">익절가 (선택)</div><div class="field"><input id="fTP" inputmode="decimal" placeholder="없음"></div></div></div>` : '';
@@ -542,7 +536,7 @@ function renderForm() {
       <div class="field"><input id="fAmt" inputmode="decimal" placeholder="0"><span>${amtUnit}</span></div></div>
     <div class="pcts">${[10, 25, 50, 100].map((p) => `<button data-p="${p}">${p}%</button>`).join('')}</div>
     ${sltp}<div class="calc num" id="calc"></div>${jr}${btns}
-    <div class="note">${isFut ? '수수료 시장가 0.05% · 지정가 0.02% · 유지증거금 0.5% · 8시간마다 펀딩비' : '수수료 0.05% (업비트) · 최소 주문 5,000원'}</div></div>`;
+    <div class="note">${isFut ? '수수료 시장가 0.05% · 지정가 0.02% · 유지증거금 0.5% · 8시간마다 펀딩비' : '수수료 0.1% (바이낸스 현물) · 최소 주문 5 USDT'}</div></div>`;
   $$('#sideSeg button').forEach((b) => b.onclick = () => { ui.side = b.dataset.side; renderForm(); });
   $$('#typeSeg button').forEach((b) => b.onclick = () => { ui.otype = b.dataset.t; renderForm(); });
   const lev = $('#fLev'), levN = $('#fLevN');
@@ -550,7 +544,7 @@ function renderForm() {
   $$('.pcts button').forEach((b) => b.onclick = () => {
     const p = +b.dataset.p / 100;
     const v = isFut ? ME.fut.wallet * p / (1 + ui.lev * E.FEE.futTaker) : buy ? ME.spot.cash * p : holdQty * p;
-    $('#fAmt').value = isFut ? Math.floor(v * 100) / 100 : buy ? Math.floor(v) : +v.toPrecision(8);
+    $('#fAmt').value = isFut || buy ? Math.floor(v * 100) / 100 : +v.toPrecision(8);
     updateCalc();
   });
   $$('#formPane input').forEach((i) => i.addEventListener('input', updateCalc));
@@ -573,12 +567,12 @@ function updateCalc() {
     if (sl && qty) { const risk = Math.abs(px - sl) * qty; L.push(['손절 시 손실', `<span class="dn">−${fmoney(risk, 'fut')} USDT (${fpct(-risk / Math.max(1, E.equity(ME, prices()).fut), 1)})</span>`]); if (tp) L.push(['손익비', (Math.abs(tp - px) / Math.abs(px - sl)).toFixed(2)]); }
   } else if (ui.side === 'buy') {
     const qty = px && amt ? amt * (1 - E.FEE.spot) / px : 0;
-    L.push(['예상 수량', `${fqty(qty)} ${s}`], ['수수료', `${fmoney((amt || 0) * E.FEE.spot)} 원`]);
-    if (sl && qty) { const risk = (px - sl) * qty; L.push(['손절 시 손실', `<span class="dn">−${fmoney(risk)} 원 (${fpct(-risk / Math.max(1, E.equity(ME, prices()).spot), 1)})</span>`]); if (tp) L.push(['손익비', ((tp - px) / (px - sl)).toFixed(2)]); }
+    L.push(['예상 수량', `${fqty(qty)} ${s}`], ['수수료', `${fmoney((amt || 0) * E.FEE.spot)} USDT`]);
+    if (sl && qty) { const risk = (px - sl) * qty; L.push(['손절 시 손실', `<span class="dn">−${fmoney(risk)} USDT (${fpct(-risk / Math.max(1, E.equity(ME, prices()).spot), 1)})</span>`]); if (tp) L.push(['손익비', ((tp - px) / (px - sl)).toFixed(2)]); }
   } else {
     const h = ME.spot.hold[s];
-    L.push(['예상 금액', `${fmoney((amt || 0) * (px || 0) * (1 - E.FEE.spot))} 원`]);
-    if (h) L.push(['예상 손익', `<span class="${cls((px - h.avg))}">${fsign((amt || 0) * ((px || 0) * (1 - E.FEE.spot) - h.avg))} 원</span>`]);
+    L.push(['예상 금액', `${fmoney((amt || 0) * (px || 0) * (1 - E.FEE.spot))} USDT`]);
+    if (h) L.push(['예상 손익', `<span class="${cls((px - h.avg))}">${fsign((amt || 0) * ((px || 0) * (1 - E.FEE.spot) - h.avg))} USDT</span>`]);
   }
   c.innerHTML = L.map(([a, b]) => `<span class="mute">${a}</span><span>${b}</span>`).join('');
 }
@@ -608,7 +602,7 @@ async function submit(side) {
     const price = numIn('fPrice'); if (!price) return toast('가격을 넣어 주세요');
     if (ui.otype === 'stop' && (dirLong ? price <= ref : price >= ref)) return toast(`조건 주문은 ${dirLong ? '현재가보다 높은 돌파 가격' : '현재가보다 낮은 이탈 가격'}이어야 해요`);
     const o = { mkt: mk, sym: s, side, type: ui.otype, price, ...meta };
-    if (mk === 'spot') { if (side === 'buy') o.krw = amt; else o.qty = amt; } else { o.margin = amt; o.lev = ui.lev; }
+    if (mk === 'spot') { if (side === 'buy') o.quote = amt; else o.qty = amt; } else { o.margin = amt; o.lev = ui.lev; }
     E.placeOrder(ME, o, t);
     toast(`${s} ${sideTxt(o)} ${typeTxt(o)} 주문 접수 · ${fpx(price, mk)}`);
   }
@@ -681,7 +675,7 @@ function tabOrd(body, st) {
   body.innerHTML = `<table class="t"><thead><tr><th class="l">접수</th><th class="l">종목</th><th class="l">구분</th><th>가격</th><th>금액 / 수량</th><th>손절 / 익절</th><th class="l">상태</th><th class="l">메모</th><th></th></tr></thead><tbody>${os.map((o) => `<tr>
     <td class="l num">${ftime(o.created)}</td><td class="l"><b>${o.sym}</b> <span class="mute">${o.mkt === 'fut' ? '선물' : '현물'}</span></td>
     <td class="l"><span class="pill ${o.side === 'buy' || o.side === 'long' ? 'long' : 'short'}">${sideTxt(o)}</span> ${typeTxt(o)}${o.lev ? ` ${o.lev}x` : ''}</td>
-    <td class="num">${fpx(o.price, o.mkt)}</td><td class="num">${o.krw ? fmoney(o.krw) + ' 원' : o.margin ? fmoney(o.margin, 'fut') + ' USDT' : fqty(o.qty)}</td>
+    <td class="num">${fpx(o.price, o.mkt)}</td><td class="num">${(o.quote ?? o.krw) ? fmoney(o.quote ?? o.krw) + ' USDT' : o.margin ? fmoney(o.margin) + ' USDT' + (o.lev ? ` · ${o.lev}x` : '') : fqty(o.qty)}</td>
     <td class="num">${fpx(o.sl, o.mkt)} / ${fpx(o.tp, o.mkt)}</td>
     <td class="l">${o.status === 'open' ? '<span class="pill acc">대기</span>' : `<span class="pill">${{ filled: '체결', canceled: '취소', expired: '만료', rejected: '거절' }[o.status]}</span> <span class="mute">${esc(o.why || '')}</span>`}</td>
     <td class="wrap2">${esc(o.note || o.reason || '')}</td>
@@ -790,9 +784,9 @@ function tabBot(body) {
   if (!BOT || !BOT.rows.length) { body.innerHTML = '<div class="empty">봇 기록을 찾지 못했어요 (paper/*/equity.csv).</div>'; return; }
   const NAME = { A: 'TSB7 1/6 (현행)', B: 'TSB7 1/5 + 노출 상한 80%', C: 'TSB7 1/4', D: 'TSB7 + BB20 1/8', H: 'BTC 보유', F: 'BTC 50일선 필터' };
   const rec = Object.fromEntries((BOT.rec || []).map((r) => [r.acct, r]));
-  body.innerHTML = `<table class="t"><thead><tr><th class="l">계좌</th><th>평가액</th><th>수익률</th><th>제때 실행했다면</th><th>놓친 거래</th><th>보유</th><th class="l">BTC 필터</th><th class="l">갱신</th><th>추이</th></tr></thead><tbody>${BOT.rows.map((r) => {
+  body.innerHTML = `<table class="t"><thead><tr><th class="l">계좌</th><th>평가액 (원)</th><th>수익률</th><th>제때 실행했다면</th><th>놓친 거래</th><th>보유</th><th class="l">BTC 필터</th><th class="l">갱신</th><th>추이</th></tr></thead><tbody>${BOT.rows.map((r) => {
     const x = r.last, c = rec[r.a];
-    return `<tr><td class="l"><b>${r.a}</b> <span class="mute">${NAME[r.a] || ''}</span></td><td class="num">${fmoney(+x.equity)}</td><td class="num ${cls(+x.ret)}">${fpct(+x.ret)}</td>
+    return `<tr><td class="l"><b>${r.a}</b> <span class="mute">${NAME[r.a] || ''}</span></td><td class="num">${fkrw(+x.equity)}</td><td class="num ${cls(+x.ret)}">${fpct(+x.ret)}</td>
       <td class="num ${c ? cls(+c.ontime_ret) : ''}">${c ? fpct(+c.ontime_ret) : '–'}</td><td class="num">${c ? c.ontime_only : '–'}</td><td class="l">${esc(x.holdings || '–')}</td>
       <td class="l">${x.btc_filter_4h === 'True' ? '<span class="up">켜짐</span>' : '<span class="dn">꺼짐</span>'}</td><td class="l num">${esc(x.time_kst)}</td><td>${spark(r.hist)}</td></tr>`;
   }).join('')}</tbody></table><p class="note">'제때 실행했다면' = 하루 한 번 대조 실행이 놓친 매수·늦은 매도를 다음 봉 시가로 반영한 값.</p>`;
@@ -818,21 +812,22 @@ function tabSet(body) {
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">${ST.map(([k, v]) => `<label class="note"><input type="checkbox" data-st="${k}" ${cfg.studies.includes(k) ? 'checked' : ''}> ${v}</label>`).join('')}</div>
       <div class="lbl">화면 테마</div><div class="seg" id="sTheme">${[['system', '시스템'], ['light', '밝게'], ['dark', '어둡게']].map(([k, v]) => `<button data-th="${k}" class="${cfg.theme === k ? 'on' : ''}">${v}</button>`).join('')}</div></section>
     <section><h3>내 계좌</h3>
+      <div class="lbl">종목 (바이낸스 USDT 마켓 이름, 쉼표로 구분 · 바꾸면 새로고침)</div><div class="row"><div class="field" style="flex:1"><input id="sSyms" value="${esc(SYMS.join(', '))}" style="text-align:left"></div><button class="btn2" id="sSymSave">적용</button></div>
       <div class="lbl">셋업 목록 (쉼표로 구분)</div><textarea id="sSetups">${esc(ME.setups.join(', '))}</textarea>
-      <div class="row"><div style="flex:1"><div class="lbl">현물 시작 자금 (원)</div><div class="field"><input id="sKrw" value="${ME.init.krw}"></div></div><div style="flex:1"><div class="lbl">선물 시작 자금 (USDT)</div><div class="field"><input id="sUsdt" value="${ME.init.usdt}"></div></div></div>
+      <div class="row"><div style="flex:1"><div class="lbl">현물 시작 자금 (USDT)</div><div class="field"><input id="sKrw" value="${ME.init.spot ?? 10000}"></div></div><div style="flex:1"><div class="lbl">선물 시작 자금 (USDT)</div><div class="field"><input id="sUsdt" value="${ME.init.usdt}"></div></div></div>
       <div class="row"><button class="btn2" id="sSetSave">저장</button><button class="btn2" id="sExport">기록 내려받기 (JSON)</button><button class="btn2 danger" id="sReset">계좌 초기화</button></div>
       <div class="note">시작 ${ftime(ME.created)} · 거래 ${ME.trades.length}건 · 체결 ${ME.fills.length}건</div></section>
     <section><h3>연결 점검</h3><div class="note">문제가 있을 때 눌러서 결과를 캡처해 주세요.</div><button class="btn2" id="sDiag">점검</button><div id="diag" class="note num"></div></section></div>`;
   $('#sDiag').onclick = async () => {
     const out = [], ok = (b) => b ? '✔' : '✘';
     const tryF = async (u) => { try { const r = await fetch(u, { cache: 'no-store' }); return r.ok; } catch { return false; } };
-    out.push(`${ok(feedOk.spot)} 업비트 실시간 (웹소켓)`);
-    out.push(`${ok(await tryF('https://api.upbit.com/v1/ticker?markets=KRW-BTC'))} 업비트 REST (놓친 체결 · BTC 필터)`);
+    out.push(`${ok(now() - spotSeenWS < 5000)} 바이낸스 현물 실시간 (웹소켓)`);
+    out.push(`${ok(await tryF('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT'))} 바이낸스 현물 REST (놓친 체결 · BTC 필터 · 차트)`);
     out.push(`${ok(feedOk.fut)} 바이낸스 실시간 (웹소켓 호가)`);
     out.push(`${ok(now() - markSeenWS < 5000)} 바이낸스 마크 가격 (웹소켓)`);
     out.push(`${ok(await tryF('https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT'))} 바이낸스 REST (마크 가격 · 놓친 체결 · 펀딩)`);
     out.push(`${ok(ghOn() && (await gh('').then((r) => r.ok).catch(() => false)))} GitHub 저장소`);
-    out.push(`BTC 필터 출처: ${btcFilter ? (btcFilter.src || '업비트') : '없음'} · 놓친 구간 확인: ${catchFail ? '실패' : caughtUp ? '완료' : '진행 중'}`);
+    out.push(`BTC 필터 출처: ${btcFilter ? btcFilter.src : '없음'} · 놓친 구간 확인: ${catchFail ? '실패' : caughtUp ? '완료' : '진행 중'}`);
     $('#diag').innerHTML = out.join('<br>');
   };
   $('#sSave').onclick = async () => {
@@ -844,13 +839,14 @@ function tabSet(body) {
   $$('[data-st]', body).forEach((c) => c.onchange = () => { cfg.studies = $$('[data-st]', body).filter((x) => x.checked).map((x) => x.dataset.st); saveCfg(); if (cfg.chart === 'tv') mountTV(); });
   $('#sIv').onchange = (e) => { cfg.interval = e.target.value; saveCfg(); if (cfg.chart === 'tv') mountTV(); };
   $$('#sTheme button').forEach((b) => b.onclick = () => { cfg.theme = b.dataset.th; saveCfg(); applyTheme(); renderTabBody(); mountChart(); });
+  $('#sSymSave').onclick = () => { const v = $('#sSyms').value.toUpperCase().split(/[\s,]+/).map((x) => x.replace(/USDT$/, '')).filter((x) => /^[A-Z0-9]{2,12}$/.test(x)); if (!v.length) return toast('종목을 하나 이상 넣어 주세요'); cfg.syms = [...new Set(v)]; saveCfg(); location.reload(); };
   $('#sSetSave').onclick = () => { ME.setups = $('#sSetups').value.split(',').map((x) => x.trim()).filter(Boolean); save(); toast('저장했어요'); };
   $('#sExport').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(ME, null, 1)], { type: 'application/json' })); a.download = `desk-${new Date().toISOString().slice(0, 10)}.json`; a.click(); };
   $('#sReset').onclick = async () => {
     const ok = await modal('<b>계좌를 초기화할까요?</b><div class="note">지금까지의 포지션·주문·체결·일지가 모두 지워지고 시작 자금으로 새로 시작해요. 저장소의 이전 기록은 GitHub 커밋 기록에 남아 있어요.</div>', [{ label: '취소', ret: false }, { label: '초기화', ret: true, cls: 'danger' }]);
     if (!ok) return;
     const setups = ME.setups;
-    ME = E.newAccount({ krw: +$('#sKrw').value || 10_000_000, usdt: +$('#sUsdt').value || 10_000 }); ME.setups = setups;
+    ME = E.newAccount({ spot: +$('#sKrw').value || 10_000, usdt: +$('#sUsdt').value || 10_000 }); ME.setups = setups;
     for (const mkt of ['spot', 'fut']) for (const s of SYMS) ME.seen[`${mkt}:${s}`] = Math.floor(now() / FIVE) * FIVE;
     save(); renderAll(); toast('새 계좌로 시작했어요');
   };
@@ -876,8 +872,9 @@ function bind() {
 async function start() {
   applyTheme(); bind(); renderAll(); mountChart();
   setSync(ghOn() ? 'wait' : '', ghOn() ? '저장소 확인 중' : '이 기기에만 저장 (설정에서 GitHub 연결)');
-  upbitWS(); binanceWS();
-  pollFut(); pollFutTicker(); setInterval(pollFut, 2000); setInterval(pollFutTicker, 20000);
+  spotWS(); binanceWS();
+  pollFut(); pollFutTicker(); setInterval(pollFut, 2000); setInterval(pollFutTicker, 20000); setInterval(pollSpot, 3000);
+  if (migratedNote) toast('현물 계좌를 바이낸스 USDT 기준(1만 USDT)으로 새로 시작했어요. 선물 기록은 그대로예요.', 9000);
   await pullRemote();
   renderAll();
   await catchUpAll();

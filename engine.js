@@ -1,5 +1,6 @@
-/* 가상 거래소 체결 엔진 (브라우저 · node 공용) — desk engine v1
- * 계좌 하나 = 현물(원화, 업비트 기준) + 선물(USDT, 바이낸스 USDT 무기한 기준, 격리 마진)
+/* 가상 거래소 체결 엔진 (브라우저 · node 공용) — desk engine v2
+ * 계좌 하나 = 현물(USDT, 바이낸스 현물 기준) + 선물(USDT, 바이낸스 USDT 무기한 기준, 격리 마진)
+ * v2: 현물을 업비트 원화 → 바이낸스 USDT 로 (수수료 0.1%, 최소 주문 5 USDT). 현물 매수 금액 필드는 quote (예전 krw 도 읽음)
  * 실시간: 시장가는 즉시 호가로, 대기 주문·손절·익절·청산은 들어오는 가격(틱 = 고저가 같은 캔들)으로 확인
  * 놓친 체결: 마지막 확인 이후 캔들의 시가·고가·저가로 순서대로 확인 (한 캔들에 손절·익절이 다 닿으면 손절 먼저 = 보수적)
  */
@@ -8,21 +9,22 @@
   else root.DeskEngine = factory();
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
-  const SYMS = ['BTC', 'ETH', 'XRP', 'SOL', 'DOGE', 'ADA'];
-  const FEE = { spot: 0.0005, futTaker: 0.0005, futMaker: 0.0002 };
+  const SYMS = ['BTC', 'ETH', 'XRP', 'SOL', 'DOGE', 'ADA', 'LINK', 'NEAR'];
+  const FEE = { spot: 0.001, futTaker: 0.0005, futMaker: 0.0002 };
   const MMR = 0.005;                 // 유지증거금률 (단순화: 모든 코인 0.5%)
-  const MIN_SPOT_KRW = 5000;
+  const MIN_SPOT = 5;                // USDT
+  const SCHEMA = 2;
   const MIN_FUT_USDT = 5;
 
   const uid = (p) => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   const r8 = (x) => Math.round(x * 1e8) / 1e8;
 
   function newAccount(opt = {}) {
-    const krw = opt.krw ?? 10_000_000, usdt = opt.usdt ?? 10_000;
+    const spot = opt.spot ?? 10_000, usdt = opt.usdt ?? 10_000;
     return {
-      schema: 1, created: opt.now ?? Date.now(), name: opt.name || '내 계좌',
-      init: { krw, usdt },
-      spot: { cash: krw, hold: {} },          // hold[sym] = {qty, avg, sl, tp, tradeId}
+      schema: SCHEMA, ccy: 'USDT', created: opt.now ?? Date.now(), name: opt.name || '내 계좌',
+      init: { spot, usdt },
+      spot: { cash: spot, hold: {} },         // hold[sym] = {qty, avg, sl, tp, tradeId}
       fut: { wallet: usdt, pos: {} },          // pos[sym] = {side, qty, entry, margin, lev, sl, tp, tradeId, opened}
       orders: [], fills: [], trades: [], funding: [], seen: {}, lastFunding: {},
       setups: ['돌파', '눌림목', '추세 이어가기', '반전', '뉴스·이벤트', '기타'],
@@ -38,7 +40,7 @@
   }
   function upnl(p, px) { return p.side === 'long' ? p.qty * (px - p.entry) : p.qty * (p.entry - px); }
   function equity(st, px) {
-    // px: {spot: {BTC: krw}, fut: {BTC: usdt}}
+    // px: {spot: {BTC: usdt}, fut: {BTC: usdt}}
     let spot = st.spot.cash;
     for (const [s, h] of Object.entries(st.spot.hold)) spot += h.qty * (px.spot?.[s] ?? h.avg);
     let fut = st.fut.wallet;
@@ -73,9 +75,9 @@
   }
 
   // ───────────────────────────── 현물
-  function spotBuy(st, sym, krw, price, t, reason, meta = {}, fee = FEE.spot) {
+  function spotBuy(st, sym, krw, price, t, reason, meta = {}, fee = FEE.spot) {     // krw = 매수 금액 (USDT, 이름만 예전 그대로)
     krw = Math.min(krw, st.spot.cash);
-    if (!(krw >= MIN_SPOT_KRW) || !(price > 0)) return { ok: false, why: `주문 금액 부족 (최소 ${MIN_SPOT_KRW.toLocaleString()}원, 현금 ${Math.floor(st.spot.cash).toLocaleString()}원)` };
+    if (!(krw >= MIN_SPOT) || !(price > 0)) return { ok: false, why: `주문 금액 부족 (최소 ${MIN_SPOT} USDT, 현금 ${st.spot.cash.toFixed(2)} USDT)` };
     const qty = r8((krw * (1 - fee)) / price);
     let h = st.spot.hold[sym];
     let tr;
@@ -99,7 +101,7 @@
     const h = st.spot.hold[sym];
     if (!h || h.qty <= 0) return { ok: false, why: '보유 수량 없음' };
     qty = Math.min(qty, h.qty);
-    if (h.qty - qty < 1e-9 || (h.qty - qty) * price < MIN_SPOT_KRW) qty = h.qty;   // 자투리는 전량
+    if (h.qty - qty < 1e-9 || (h.qty - qty) * price < MIN_SPOT) qty = h.qty;   // 자투리는 전량
     const gross = qty * price, krw = gross * (1 - fee);
     const pnl = krw - h.avg * qty;
     st.spot.cash += krw;
@@ -188,7 +190,7 @@
   }
 
   // ───────────────────────────── 주문 (지정가 · 조건(돌파/이탈) · 시장가 예약)
-  // o = {mkt:'spot'|'fut', sym, side:'buy'|'sell'|'long'|'short', type:'limit'|'stop'|'market', price, krw (현물 매수), qty (현물 매도·선물 청산), margin, lev, sl, tp, reduce, expires, note, setup, reason, emotion, by}
+  // o = {mkt:'spot'|'fut', sym, side:'buy'|'sell'|'long'|'short', type:'limit'|'stop'|'market', price, quote (현물 매수 USDT), qty (현물 매도·선물 청산), margin, lev, sl, tp, reduce, expires, note, setup, reason, emotion, by}
   function placeOrder(st, o, t) {
     o.id = o.id || uid('O');
     o.created = o.created ?? t;
@@ -212,7 +214,7 @@
     const why = how || (o.type === 'limit' ? '지정가 체결' : o.type === 'stop' ? '조건(돌파·이탈) 체결' : '시장가');
     let r;
     if (o.mkt === 'spot') {
-      if (o.side === 'buy') r = spotBuy(st, o.sym, o.krw, price, t, why, meta, fee);
+      if (o.side === 'buy') r = spotBuy(st, o.sym, o.quote ?? o.krw, price, t, why, meta, fee);
       else r = spotSell(st, o.sym, o.qty ?? Infinity, price, t, why, fee);
     } else {
       const p = st.fut.pos[o.sym];
@@ -335,5 +337,5 @@
     return out;
   }
 
-  return { SYMS, FEE, MMR, newAccount, liqPrice, upnl, equity, spotBuy, spotSell, futOpen, futClose, futLiquidate, placeOrder, cancelOrder, execOrder, processCandle, catchUp, applyFunding, stats, trOf };
+  return { SYMS, FEE, MMR, SCHEMA, MIN_SPOT, newAccount, liqPrice, upnl, equity, spotBuy, spotSell, futOpen, futClose, futLiquidate, placeOrder, cancelOrder, execOrder, processCandle, catchUp, applyFunding, stats, trOf };
 });
