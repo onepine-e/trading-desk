@@ -82,31 +82,51 @@ const b64e = (str) => { const b = new TextEncoder().encode(str); let s = ''; for
 const b64d = (b64) => new TextDecoder().decode(Uint8Array.from(atob(b64.replace(/\n/g, '')), (c) => c.charCodeAt(0)));
 const ghOn = () => !!(cfg.token && cfg.owner && cfg.repo);
 async function gh(path, opt = {}) {
-  const url = `https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/${path}` + (opt.method ? '' : `?ref=${encodeURIComponent(cfg.branch)}`);
-  const r = await fetch(url, { method: opt.method || 'GET', headers: { Authorization: `Bearer ${cfg.token}`, Accept: opt.raw ? 'application/vnd.github.raw+json' : 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' }, body: opt.body, cache: 'no-store' });
-  return r;
+  const ref = opt.ref || cfg.branch;
+  const url = `https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/${path}` + (opt.method ? '' : `?ref=${encodeURIComponent(ref)}`);
+  return fetch(url, { method: opt.method || 'GET', headers: { Authorization: `Bearer ${cfg.token}`, Accept: opt.raw ? 'application/vnd.github.raw+json' : 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' }, body: opt.body, cache: 'no-store' });
 }
-async function ghJSON(path) {
-  const r = await gh(path);
+async function ghApi(path, opt = {}) {      // 브랜치 만들기 등 contents 밖의 API
+  return fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}/${path}`, { method: opt.method || 'GET', headers: { Authorization: `Bearer ${cfg.token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' }, body: opt.body ? JSON.stringify(opt.body) : undefined, cache: 'no-store' });
+}
+async function ghJSON(path, ref) {
+  const r = await gh(path, { ref });
   if (r.status === 404) return { data: null, sha: null };
   if (!r.ok) throw new Error(`GitHub ${r.status}`);
   const j = await r.json();
   if (j.content) return { data: JSON.parse(b64d(j.content)), sha: j.sha };
-  const raw = await gh(path, { raw: true });
+  const raw = await gh(path, { raw: true, ref });
   return { data: JSON.parse(await raw.text()), sha: j.sha };
 }
-async function ghText(path) {
-  const r = await gh(path, { raw: true });
+async function ghText(path, ref) {
+  const r = await gh(path, { raw: true, ref });
   if (r.status === 404) return null;
   if (!r.ok) throw new Error(`GitHub ${r.status}`);
   return r.text();
 }
-async function ghPut(path, data, sha, msg) {
-  const body = JSON.stringify({ message: msg, content: b64e(JSON.stringify(data, null, 1)), branch: cfg.branch, ...(sha ? { sha } : {}) });
+async function ghPut(path, data, sha, msg, branch) {
+  const body = JSON.stringify({ message: msg, content: b64e(JSON.stringify(data, null, 1)), branch: branch || cfg.branch, ...(sha ? { sha } : {}) });
   const r = await gh(path, { method: 'PUT', body });
   if (!r.ok) { const e = new Error(`GitHub ${r.status}`); e.status = r.status; throw e; }
   return (await r.json()).content.sha;
 }
+// 내 계좌 기록(me.json)은 별도 브랜치 desk-me 에 — 저장할 때마다 생기는 커밋이 봇 기록(main)에 섞이지 않게. 없으면 main 에서 갈라 만듦.
+const ME_BR = () => cfg.meBranch || 'desk-me';
+let meBranchOk = false;
+async function ensureMeBranch() {
+  if (meBranchOk) return true;
+  const r = await ghApi(`git/ref/heads/${ME_BR()}`);
+  if (r.ok) return (meBranchOk = true);
+  if (r.status !== 404) throw new Error(`GitHub ${r.status}`);
+  const m = await ghApi(`git/ref/heads/${encodeURIComponent(cfg.branch)}`);
+  if (!m.ok) throw new Error(`GitHub ${m.status}`);
+  const c = await ghApi('git/refs', { method: 'POST', body: { ref: `refs/heads/${ME_BR()}`, sha: (await m.json()).object.sha } });
+  if (!c.ok && c.status !== 422) throw new Error(`브랜치 만들기 실패 ${c.status}`);
+  toast(`내 계좌 기록을 저장소의 ${ME_BR()} 브랜치로 옮겼어요 (봇 기록과 분리)`);
+  return (meBranchOk = true);
+}
+const meGet = async () => { await ensureMeBranch(); return ghJSON('desk/me.json', ME_BR()); };
+const mePut = async (sha, msg) => { await ensureMeBranch(); return ghPut('desk/me.json', ME, sha, msg, ME_BR()); };
 function setSync(state, text) { const s = $('#syncStat'); s.querySelector('.dot').className = 'dot ' + state; s.querySelector('span:last-child').textContent = text; }
 
 // 기기 사이 동기화: 저장소의 me.json 이 기준. 열려 있는 동안 20초마다(화면에 보일 때) + 다시 볼 때 확인해서 다른 기기의 거래를 받아 옴.
@@ -140,15 +160,15 @@ async function pushRemote() {
   saving = true;
   try {
     const mine = msig(ME);
-    try { ME_SHA = await ghPut('desk/me.json', ME, ME_SHA, `desk: 내 계좌 ${new Date().toISOString()}`); }
+    try { ME_SHA = await mePut(ME_SHA, `desk: 내 계좌 ${new Date().toISOString()}`); }
     catch (e) {
       if (e.status !== 409 && e.status !== 422) throw e;
-      const cur = await ghJSON('desk/me.json'), rs = msig(cur.data && migrateMe(cur.data));
+      const cur = await meGet(), rs = msig(cur.data && migrateMe(cur.data));
       if (cur.data && rs !== BASE_SIG && rs !== mine) {          // 저장소도 중요한 내용이 바뀜
         if (mine === BASE_SIG) adoptRemote(cur, '다른 기기의 거래를 불러왔어요'); else conflict(cur);
         saving = false; setSync('ok', `저장소와 맞춤 ${ftime(now())}`); return;
       }
-      ME_SHA = await ghPut('desk/me.json', ME, cur.sha, `desk: 내 계좌 ${new Date().toISOString()}`);
+      ME_SHA = await mePut(cur.sha, `desk: 내 계좌 ${new Date().toISOString()}`);
     }
     LS.set('desk.me.sha', ME_SHA); setBase(mine); lastPull = now();
     setSync('ok', `저장됨 ${ftime(now())}`);
@@ -158,7 +178,7 @@ async function pushRemote() {
 async function pullRemote(quiet) {
   if (!ghOn() || saving || saveTimer) return;
   try {
-    const r = await ghJSON('desk/me.json');
+    const r = await meGet();
     lastPull = now();
     if (saving || saveTimer) return;      // 확인하는 사이 이 기기에서 저장이 시작됨
     if (!r.data) { if (msig(ME) !== BASE_SIG) save(); setSync('ok', '저장소 준비'); return; }
