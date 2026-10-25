@@ -180,7 +180,11 @@ function onTick(mkt, s, px) {
   if (!caughtUp) return;
   const ev = E.processCandle(ME, mkt, s, { t, o: px, h: px, l: px, c: px });
   if (!catchFail) ME.seen[`${mkt}:${s}`] = Math.floor(t / FIVE) * FIVE;
-  if (ev.length) { for (const f of ev) toast(fillMsg(f)); save(); renderForm(); renderTabs(); }
+  if (ev.length) { for (const f of ev) toast(fillMsg(f)); save(); renderForm(); renderTabs(); liqHint(ev); }
+}
+function liqHint(ev) {     // 강제청산 뒤 지갑이 바닥이면 리셋 안내
+  if (!ev.some((f) => f.reason === '강제청산') || Object.keys(ME.fut.pos).length) return;
+  if (ME.fut.wallet < ME.init.usdt * 0.2) toast('선물 지갑이 많이 줄었어요. <b>거래 → 설정 → 선물 자금 리셋</b>으로 다시 채울 수 있어요. 거래 기록과 손실은 그대로 남고, 수익률은 리셋 전 손실까지 포함해서 계산돼요.', 12000);
 }
 function fillMsg(f) {
   const mk = f.mkt === 'fut' ? 'fut' : 'spot';
@@ -320,7 +324,7 @@ async function catchUpAll() {
     for (const s of Object.keys(ME.fut.pos)) await fundingCatchUp(s);
     for (const mkt of ['spot', 'fut']) for (const s of SYMS) ME.seen[`${mkt}:${s}`] = Math.floor(t / FIVE) * FIVE;
     caughtUp = true; catchFail = false;
-    if (ev.length) { toast(`<b>화면을 닫아 둔 동안 ${ev.length}건 체결</b> (캔들 ${n}개 확인)<br>` + ev.slice(0, 6).map(fillMsg).join('<br>'), 12000); }
+    if (ev.length) { toast(`<b>화면을 닫아 둔 동안 ${ev.length}건 체결</b> (캔들 ${n}개 확인)<br>` + ev.slice(0, 6).map(fillMsg).join('<br>'), 12000); liqHint(ev); }
     save();
   } catch (e) {
     caughtUp = true; catchFail = true;
@@ -573,9 +577,11 @@ function renderTop() {
   if (!st) { $('#eqSpot').textContent = '–'; $('#eqFut').textContent = '–'; }
   else {
     const eq = E.equity(st, prices());
-    const i0 = st.init.spot ?? st.init.krw;
-    $('#eqSpot').innerHTML = `${fmoney(eq.spot)} <span class="${cls(eq.spot - i0)}" style="font-size:12px">${fpct(eq.spot / i0 - 1)}</span>`;
-    $('#eqFut').innerHTML = `${fmoney(eq.fut, 'fut')} <span class="${cls(eq.fut - st.init.usdt)}" style="font-size:12px">${fpct(eq.fut / st.init.usdt - 1)}</span>`;
+    // % = 총 손익 ÷ 처음 자금 (자금 리셋으로 채운 돈은 손익에서 뺌 → 리셋해도 성적은 이어짐)
+    const i0 = st.init.spot ?? st.init.krw, pS = eq.spot - E.deposited(st, 'spot'), pF = eq.fut - E.deposited(st, 'fut');
+    const nr = (m) => (st.resets || []).filter((r) => r.mkt === m).length, rs = (m) => nr(m) ? ` <span class="pill" title="자금 리셋 ${nr(m)}회 — 수익률은 리셋 전 손실까지 포함">리셋 ${nr(m)}</span>` : '';
+    $('#eqSpot').innerHTML = `${fmoney(eq.spot)} <span class="${cls(pS)}" style="font-size:12px">${fpct(pS / i0)}</span>${rs('spot')}`;
+    $('#eqFut').innerHTML = `${fmoney(eq.fut)} <span class="${cls(pF)}" style="font-size:12px">${fpct(pF / st.init.usdt)}</span>${rs('fut')}`;
   }
   $('#btcF').innerHTML = btcFilter ? `<span class="${btcFilter.on ? 'up' : 'dn'}">${btcFilter.on ? '켜짐' : '꺼짐'}</span> <span class="num mute" style="font-size:12px">${fpct(btcFilter.gap, 1)}</span>` : '–';
   $('#btcF').title = btcFilter ? `BTC 4시간봉 종가 vs 50일 평균 · ${btcFilter.src}` : '';
@@ -913,7 +919,11 @@ function tabSet(body) {
       <div class="lbl">종목 (바이낸스 USDT 마켓 이름, 쉼표로 구분 · 바꾸면 새로고침)</div><div class="row"><div class="field" style="flex:1"><input id="sSyms" value="${esc(SYMS.join(', '))}" style="text-align:left"></div><button class="btn2" id="sSymSave">적용</button></div>
       <div class="lbl">셋업 목록 (쉼표로 구분)</div><textarea id="sSetups">${esc(ME.setups.join(', '))}</textarea>
       <div class="row"><div style="flex:1"><div class="lbl">현물 시작 자금 (USDT)</div><div class="field"><input id="sKrw" value="${ME.init.spot ?? 10000}"></div></div><div style="flex:1"><div class="lbl">선물 시작 자금 (USDT)</div><div class="field"><input id="sUsdt" value="${ME.init.usdt}"></div></div></div>
-      <div class="row"><button class="btn2" id="sSetSave">저장</button><button class="btn2" id="sExport">기록 내려받기 (JSON)</button><button class="btn2 danger" id="sReset">계좌 초기화</button></div>
+      <div class="row"><button class="btn2" id="sSetSave">저장</button><button class="btn2" id="sExport">기록 내려받기 (JSON)</button></div>
+      <div class="lbl">자금 리셋 — 청산 등으로 잔고가 줄었을 때 시작 자금까지 다시 채워요. 거래·일지·손실 기록은 그대로 남고, 채운 돈은 '추가 입금'으로 기록돼 수익률은 리셋 전 손실까지 포함해서 계산돼요.</div>
+      <div class="row"><button class="btn2" id="sTopSpot">현물 자금 리셋</button><button class="btn2" id="sTopFut">선물 자금 리셋</button></div>
+      ${(ME.resets || []).length ? `<div class="note">${ME.resets.slice(-6).reverse().map((r) => `${ftime(r.t)} ${r.mkt === 'fut' ? '선물' : '현물'} ${fmoney(r.before)} → ${fmoney(r.after)} USDT${r.liq ? ` · 그 사이 강제청산 ${r.liq}회` : ''}${r.why ? ' · ' + esc(r.why) : ''}`).join('<br>')}${ME.resets.length > 6 ? `<br>… 모두 ${ME.resets.length}회` : ''}</div>` : ''}
+      <div class="row"><button class="btn2 danger" id="sReset">모두 지우고 새로 시작</button></div>
       <div class="note">시작 ${ftime(ME.created)} · 거래 ${ME.trades.length}건 · 체결 ${ME.fills.length}건</div></section>
     <section><h3>연결 점검</h3><div class="note">문제가 있을 때 눌러서 결과를 캡처해 주세요.</div><button class="btn2" id="sDiag">점검</button><div id="diag" class="note num"></div></section></div>`;
   $('#sDiag').onclick = async () => {
@@ -940,6 +950,18 @@ function tabSet(body) {
   $('#sSymSave').onclick = () => { const v = $('#sSyms').value.toUpperCase().split(/[\s,]+/).map((x) => x.replace(/USDT$/, '')).filter((x) => /^[A-Z0-9]{2,12}$/.test(x)); if (!v.length) return toast('종목을 하나 이상 넣어 주세요'); cfg.syms = [...new Set(v)]; saveCfg(); location.reload(); };
   $('#sSetSave').onclick = () => { ME.setups = $('#sSetups').value.split(',').map((x) => x.trim()).filter(Boolean); save(); toast('저장했어요'); };
   $('#sExport').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(ME, null, 1)], { type: 'application/json' })); a.download = `desk-${new Date().toISOString().slice(0, 10)}.json`; a.click(); };
+  const doTop = async (mkt) => {
+    const name = mkt === 'fut' ? '선물' : '현물', bal = mkt === 'fut' ? ME.fut.wallet : ME.spot.cash, base = mkt === 'fut' ? ME.init.usdt : (ME.init.spot ?? 1e4);
+    const open = mkt === 'fut' ? Object.keys(ME.fut.pos).length : Object.keys(ME.spot.hold).length;
+    if (open) return toast(`${name} 포지션·보유를 먼저 정리해 주세요`);
+    if (bal >= base) return toast(`${name} 잔고가 이미 시작 자금 이상이에요`);
+    const ok = await modal(`<b>${name} 자금을 리셋할까요?</b><div class="note">${fmoney(bal)} → ${fmoney(base)} USDT (+${fmoney(base - bal)} 추가 입금으로 기록)<br>${name} 대기 주문은 취소돼요. 거래·일지는 그대로 남아요.</div><div class="lbl">이유 (선택 — 주간 평가에서 함께 봐요)</div><textarea id="topWhy" placeholder="예: 10배 롱 몰빵하다 청산"></textarea>`, [{ label: '취소', ret: null }, { label: '리셋', value: (r) => ({ why: $('#topWhy', r).value.trim() }) }]);
+    if (!ok) return;
+    const r = E.topUp(ME, mkt, now(), ok.why);
+    if (!r.ok) return toast(r.why);
+    save(); renderAll(); toast(`${name} 자금을 리셋했어요 (+${fmoney(r.add)} USDT)`);
+  };
+  $('#sTopSpot').onclick = () => doTop('spot'); $('#sTopFut').onclick = () => doTop('fut');
   $('#sReset').onclick = async () => {
     const ok = await modal('<b>계좌를 초기화할까요?</b><div class="note">지금까지의 포지션·주문·체결·일지가 모두 지워지고 시작 자금으로 새로 시작해요. 저장소의 이전 기록은 GitHub 커밋 기록에 남아 있어요.</div>', [{ label: '취소', ret: false }, { label: '초기화', ret: true, cls: 'danger' }]);
     if (!ok) return;
@@ -1069,8 +1091,9 @@ function mdd(vals) { let pk = -Infinity, m = 0; for (const v of vals) { pk = Mat
 function acctSeries(st, hist, livePx) {     // 합계(현물+선물) 평가액 시계열 + 지금
   if (!st) return null;
   const init = (st.init.spot ?? st.init.krw ?? 0) + (st.init.usdt ?? 0);
-  const pts = [{ t: st.created || 0, v: init }].concat((hist || []).map((r) => ({ t: r.t, v: r.spot + r.fut })));
-  const eq = E.equity(st, livePx), cur = eq.spot + eq.fut;
+  const extra = (t) => E.deposited(st, 'spot', t) + E.deposited(st, 'fut', t) - init;     // 자금 리셋으로 넣은 돈은 빼고 = 처음 자금 + 총 손익
+  const pts = [{ t: st.created || 0, v: init }].concat((hist || []).map((r) => ({ t: r.t, v: r.spot + r.fut - extra(r.t) })));
+  const eq = E.equity(st, livePx), cur = eq.spot + eq.fut - extra(now());
   if (isFinite(cur)) pts.push({ t: now(), v: cur });
   return { init, pts: pts.filter((p) => isFinite(p.t) && isFinite(p.v)).sort((a, b) => a.t - b.t), eq };
 }
@@ -1092,7 +1115,7 @@ async function pagePerf(el) {
   const ret = (a) => a ? a.pts[a.pts.length - 1].v / a.init - 1 : null;
   const NAME = { A: 'TSB7 1/6 (현행)', B: 'TSB7 1/5 + 상한 80%', C: 'TSB7 1/4', D: 'TSB7 + BB20', H: 'BTC 보유', F: 'BTC 50일선 필터' };
   const rows = [
-    { k: 'me', name: '나', sub: '재량 · 바이낸스 USDT', r: ret(me), spot: me ? me.eq.spot / (ME.init.spot ?? 1e4) - 1 : null, fut: me ? me.eq.fut / ME.init.usdt - 1 : null, dd: me ? mdd(me.pts.map((p) => p.v)) : null, n: sm.n, win: sm.win, R: sm.expR, since: ME.created, pts: me?.pts, base: me?.init, color: cssv('--accent') },
+    { k: 'me', name: '나', sub: '재량 · 바이낸스 USDT' + ((ME.resets || []).length ? ` · 자금 리셋 ${ME.resets.length}회 (+${fmoney(ME.resets.reduce((a, r) => a + r.add, 0))})` : ''), r: ret(me), spot: me ? (me.eq.spot - E.deposited(ME, 'spot')) / (ME.init.spot ?? 1e4) : null, fut: me ? (me.eq.fut - E.deposited(ME, 'fut')) / ME.init.usdt : null, dd: me ? mdd(me.pts.map((p) => p.v)) : null, n: sm.n, win: sm.win, R: sm.expR, since: ME.created, pts: me?.pts, base: me?.init, color: cssv('--accent') },
     { k: 'cl', name: 'Claude', sub: '재량 · 하루 2번 판단', r: ret(cl), spot: cl ? cl.eq.spot / CL.init.spot - 1 : null, fut: cl ? cl.eq.fut / CL.init.usdt - 1 : null, dd: cl ? mdd(cl.pts.map((p) => p.v)) : null, n: sc?.n, win: sc?.win, R: sc?.expR, since: CL?.created, pts: cl?.pts, base: cl?.init, color: '#7c6bd6' },
   ];
   const BC = { A: cssv('--ok'), B: '#2a9d8f', H: cssv('--mute') };
@@ -1107,7 +1130,7 @@ async function pagePerf(el) {
       <div class="tile"><small>승률</small><b class="num">${tp(sm.win)}</b><em>손익비 ${sm.payoff ? sm.payoff.toFixed(2) : '–'}</em></div>
       <div class="tile"><small>거래당 기대값</small><b class="num ${cls(sm.expR)}">${sm.expR != null ? sm.expR.toFixed(2) + 'R' : '–'}</b><em>${fsign(sm.exp)} USDT</em></div>
       <div class="tile"><small>규칙 준수</small><b class="num">${tp(sm.rule)}</b><em>돌아보기를 남긴 거래 기준</em></div></div></div>
-    <div class="pg"><h2 class="pt">세 계좌 비교 <small>시작일이 달라 같은 기간 비교는 아니에요 · 봇은 업비트 원화</small></h2>
+    <div class="pg"><h2 class="pt">세 계좌 비교 <small>시작일이 달라 같은 기간 비교는 아니에요 · 봇은 업비트 원화 · 수익률 = 총 손익 ÷ 처음 자금 (자금 리셋 전 손실 포함)</small></h2>
       <div class="tbody" style="padding:0"><table class="t cmp"><thead><tr><th class="l">계좌</th><th>수익률</th><th>현물</th><th>선물</th><th>최대 낙폭</th><th>끝난 거래</th><th>승률</th><th>평균 R</th><th class="l">시작</th></tr></thead><tbody>
       ${rows.map((r) => `<tr><td class="l">${r.color ? `<i style="display:inline-block;width:10px;height:3px;background:${r.color};vertical-align:middle;margin-right:6px"></i>` : ''}<b>${r.name}</b> <span class="mute">${esc(r.sub)}</span></td><td class="num"><b>${pc1(r.r)}</b></td><td class="num">${pc1(r.spot)}</td><td class="num">${pc1(r.fut)}</td><td class="num">${pc1(r.dd)}</td><td class="num">${r.n ?? '–'}</td><td class="num">${tp(r.win)}</td><td class="num">${r.R != null ? r.R.toFixed(2) : '–'}</td><td class="l num mute">${r.since ? ftime(r.since).slice(0, 5) : '–'}</td></tr>`).join('')}
       </tbody></table></div>

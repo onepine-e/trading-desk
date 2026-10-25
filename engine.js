@@ -189,6 +189,25 @@
     return f;
   }
 
+  // ───────────────────────────── 자금 리셋 (청산 등으로 바닥났을 때 시작 자금으로 다시 채움 — 거래 기록은 그대로, '추가 입금' 으로 남김)
+  const baseOf = (st, mkt) => mkt === 'fut' ? st.init.usdt : (st.init.spot ?? st.init.krw);
+  function deposited(st, mkt, t = Infinity) {      // 그 시각까지 넣은 돈 = 시작 자금 + 리셋으로 채운 돈
+    return baseOf(st, mkt) + (st.resets || []).filter((r) => r.mkt === mkt && r.t <= t).reduce((a, r) => a + r.add, 0);
+  }
+  function topUp(st, mkt, t, why = '') {
+    if (mkt === 'fut' && Object.keys(st.fut.pos).length) return { ok: false, why: '열린 선물 포지션을 먼저 정리해 주세요' };
+    if (mkt === 'spot' && Object.keys(st.spot.hold).length) return { ok: false, why: '보유 중인 현물을 먼저 정리해 주세요' };
+    const target = baseOf(st, mkt), before = mkt === 'fut' ? st.fut.wallet : st.spot.cash, add = r8(target - before);
+    if (!(add > 0)) return { ok: false, why: '잔고가 시작 자금 이상이에요' };
+    cancelWhere(st, (o) => o.mkt === mkt);
+    const last = (st.resets || []).filter((r) => r.mkt === mkt).reduce((a, r) => Math.max(a, r.t), st.created || 0);
+    const liq = st.trades.filter((x) => x.mkt === mkt && x.liquidated && x.closeT > last).length;
+    if (mkt === 'fut') st.fut.wallet = target; else st.spot.cash = target;
+    (st.resets ||= []).push({ t, mkt, before: r8(before), after: target, add, liq, why });
+    st.updated = Date.now();
+    return { ok: true, add, liq };
+  }
+
   // ───────────────────────────── 주문 (지정가 · 조건(돌파/이탈) · 시장가 예약)
   // o = {mkt:'spot'|'fut', sym, side:'buy'|'sell'|'long'|'short', type:'limit'|'stop'|'market', price, quote (현물 매수 USDT), qty (현물 매도·선물 청산), margin, lev, sl, tp, reduce, expires, note, setup, reason, emotion, by}
   function placeOrder(st, o, t) {
@@ -337,5 +356,5 @@
     return out;
   }
 
-  return { SYMS, FEE, MMR, SCHEMA, MIN_SPOT, newAccount, liqPrice, upnl, equity, spotBuy, spotSell, futOpen, futClose, futLiquidate, placeOrder, cancelOrder, execOrder, processCandle, catchUp, applyFunding, stats, trOf };
+  return { SYMS, FEE, MMR, SCHEMA, MIN_SPOT, newAccount, deposited, topUp, liqPrice, upnl, equity, spotBuy, spotSell, futOpen, futClose, futLiquidate, placeOrder, cancelOrder, execOrder, processCandle, catchUp, applyFunding, stats, trOf };
 });
