@@ -14,7 +14,7 @@ const LS = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* 저장 불가 (사생활 보호 모드 등) */ } },
 };
 const cfg = Object.assign({ owner: '', repo: 'tsb7-paper', branch: 'main', token: '', theme: 'system', interval: '240',
-  studies: ['MASimple@tv-basicstudies', 'BB@tv-basicstudies', 'RSI@tv-basicstudies'] }, LS.get('desk.cfg', {}));
+  studies: ['MASimple@tv-basicstudies', 'BB@tv-basicstudies', 'RSI@tv-basicstudies'], chart: 'my', myIv: '240', myInd: { ma: true, bb: true } }, LS.get('desk.cfg', {}));
 const saveCfg = () => LS.set('desk.cfg', cfg);
 let ME = LS.get('desk.me', null) || E.newAccount();
 let ME_SHA = LS.get('desk.me.sha', null);
@@ -342,6 +342,131 @@ function mountTV() {
   });
 }
 
+// ───────────────────────────── 포지션 차트 (진입가 · 손절 · 익절 · 청산가 · 대기 주문 · 체결 표시)
+const LC = window.LightweightCharts;
+const KSTS = 9 * 3600;
+const IVS = [['15', '15분'], ['60', '1시간'], ['240', '4시간'], ['D', '일']];
+const ivSec = (iv) => iv === 'D' ? 86400 : +iv * 60;
+const cssv = (k) => getComputedStyle(document.documentElement).getPropertyValue(k).trim();
+let mc = null;
+function renderChartBar() {
+  const my = cfg.chart === 'my';
+  $('#chartBar').innerHTML = `<div class="seg" id="chartSeg"><button data-c="my" class="${my ? 'on' : ''}">포지션 차트</button><button data-c="tv" class="${!my ? 'on' : ''}">트레이딩뷰</button></div>
+    ${my ? `<div class="seg" id="ivSeg">${IVS.map(([k, v]) => `<button data-iv="${k}" class="${cfg.myIv === k ? 'on' : ''}">${v}</button>`).join('')}</div>
+    <label><input type="checkbox" id="indMa" ${cfg.myInd.ma ? 'checked' : ''}>이평 20</label><label><input type="checkbox" id="indBb" ${cfg.myInd.bb ? 'checked' : ''}>볼린저 20·2</label>
+    <span class="note" id="chartNote">차트를 누르면 그 가격이 주문창에 들어가요</span>` : '<span class="note">지표·그리기는 트레이딩뷰 · 내 진입선은 포지션 차트에서</span>'}`;
+  $$('#chartSeg button').forEach((b) => b.onclick = () => { cfg.chart = b.dataset.c; saveCfg(); mountChart(); });
+  $$('#ivSeg button').forEach((b) => b.onclick = () => { cfg.myIv = b.dataset.iv; saveCfg(); mountChart(); });
+  if ($('#indMa')) { $('#indMa').onchange = (e) => { cfg.myInd.ma = e.target.checked; saveCfg(); calcInd(); }; $('#indBb').onchange = (e) => { cfg.myInd.bb = e.target.checked; saveCfg(); calcInd(); }; }
+}
+function mountChart() {
+  renderChartBar();
+  if (cfg.chart === 'tv') { if (mc) { mc.chart.remove(); mc = null; } $('#mychart').hidden = true; $('#tv').hidden = false; mountTV(); return; }
+  $('#tv').hidden = true; $('#tv').innerHTML = ''; $('#mychart').hidden = false;
+  if (mc) { mc.chart.remove(); mc = null; }
+  const el = $('#mychart'); el.innerHTML = '';
+  if (!LC) { el.innerHTML = '<div class="empty">차트 라이브러리를 불러오지 못했어요 (네트워크·광고 차단기 확인)</div>'; return; }
+  const up = cssv('--up'), dn = cssv('--dn'), mk = ui.mkt;
+  const chart = LC.createChart(el, {
+    autoSize: true, layout: { background: { type: 'solid', color: cssv('--panel') }, textColor: cssv('--mute'), fontFamily: cssv('--num'), fontSize: 11 },
+    grid: { vertLines: { color: cssv('--line') }, horzLines: { color: cssv('--line') } }, rightPriceScale: { borderColor: cssv('--line') },
+    timeScale: { borderColor: cssv('--line'), timeVisible: true, secondsVisible: false, rightOffset: 6 }, crosshair: { mode: 0 }, localization: { locale: 'ko-KR' },
+  });
+  const cs = chart.addCandlestickSeries({ upColor: up, downColor: dn, borderVisible: false, wickUpColor: up, wickDownColor: dn, priceFormat: { type: 'custom', formatter: (p) => fpx(p, mk), minMove: 1e-8 } });
+  const vs = chart.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: 'vol', lastValueVisible: false, priceLineVisible: false });
+  chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.84, bottom: 0 } });
+  const line = (color, style) => chart.addLineSeries({ color, lineWidth: 1, lineStyle: style, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+  mc = { chart, cs, vs, ma: line(cssv('--accent'), 0), bbU: line(cssv('--mute'), 2), bbL: line(cssv('--mute'), 2), lines: [], bars: [], key: `${mk}:${ui.sym}:${cfg.myIv}`, indT: 0 };
+  chart.subscribeClick((p) => { if (!p.point || readOnly() || !mc) return; const px = mc.cs.coordinateToPrice(p.point.y); if (px > 0) setPriceField(px); });
+  loadBars();
+}
+async function upbitBars(s, iv) {
+  const path = iv === 'D' ? 'days' : `minutes/${iv}`; const out = []; let to = null;
+  for (let k = 0; k < 2; k++) {
+    const r = await fetch(`https://api.upbit.com/v1/candles/${path}?market=KRW-${s}&count=200` + (to ? `&to=${encodeURIComponent(to)}` : ''));
+    if (!r.ok) throw new Error('업비트 ' + r.status);
+    const a = await r.json(); if (!a.length) break;
+    for (const x of a) out.push({ t: Date.parse(x.candle_date_time_utc + 'Z') / 1000, o: x.opening_price, h: x.high_price, l: x.low_price, c: x.trade_price, v: x.candle_acc_trade_price });
+    to = a[a.length - 1].candle_date_time_utc + 'Z'; await sleep(120);
+  }
+  return out.sort((a, b) => a.t - b.t).filter((x, i, A) => !i || x.t !== A[i - 1].t);
+}
+const BIV = { 15: '15m', 60: '1h', 240: '4h', D: '1d' };
+async function binanceBars(s, iv, spot) {
+  const r = await fetch(spot ? `https://api.binance.com/api/v3/klines?symbol=${s}USDT&interval=${BIV[iv]}&limit=400` : `https://fapi.binance.com/fapi/v1/klines?symbol=${s}USDT&interval=${BIV[iv]}&limit=400`);
+  if (!r.ok) throw new Error('바이낸스 ' + r.status);
+  return (await r.json()).map((x) => ({ t: x[0] / 1000, o: +x[1], h: +x[2], l: +x[3], c: +x[4], v: +x[7] }));
+}
+async function loadBars() {
+  if (!mc) return;
+  const key = mc.key, [mk, s, iv] = key.split(':');
+  let bars = [], note = '차트를 누르면 그 가격이 주문창에 들어가요';
+  try { bars = mk === 'fut' ? await binanceBars(s, iv) : await upbitBars(s, iv); }
+  catch (e) {
+    if (mk === 'spot') {
+      try { const b = await binanceBars(s, iv, true); const k = P.spot[s].last / b[b.length - 1].c; bars = b.map((x) => ({ ...x, o: x.o * k, h: x.h * k, l: x.l * k, c: x.c * k, v: x.v * k })); note = '업비트 과거 시세를 못 받아 바이낸스 가격을 원화로 환산해 그렸어요 (선은 정확)'; }
+      catch { note = '과거 시세를 불러오지 못했어요 — 지금부터 들어오는 시세로만 그려요'; }
+    } else note = '과거 시세를 불러오지 못했어요';
+  }
+  if (!mc || mc.key !== key) return;
+  mc.bars = bars;
+  mc.cs.setData(bars.map((b) => ({ time: b.t + KSTS, open: b.o, high: b.h, low: b.l, close: b.c })));
+  const ub = cssv('--upbg'), db = cssv('--dnbg');
+  mc.vs.setData(bars.map((b) => ({ time: b.t + KSTS, value: b.v, color: b.c >= b.o ? ub : db })));
+  if ($('#chartNote')) $('#chartNote').textContent = note;
+  calcInd(); drawLines(); mc.chart.timeScale().scrollToRealTime();
+}
+function calcInd() {
+  if (!mc) return;
+  const B = mc.bars, n = 20, ma = [], up = [], lo = [];
+  for (let i = n - 1; i < B.length; i++) {
+    let sm = 0, sq = 0; for (let k = i - n + 1; k <= i; k++) { sm += B[k].c; sq += B[k].c * B[k].c; }
+    const m = sm / n, sd = Math.sqrt(Math.max(0, sq / n - m * m)), time = B[i].t + KSTS;
+    ma.push({ time, value: m }); up.push({ time, value: m + 2 * sd }); lo.push({ time, value: m - 2 * sd });
+  }
+  mc.ma.setData(cfg.myInd.ma ? ma : []); mc.bbU.setData(cfg.myInd.bb ? up : []); mc.bbL.setData(cfg.myInd.bb ? lo : []);
+}
+function chartTick(mkt, s, px) {
+  if (!mc || cfg.chart !== 'my' || mkt !== ui.mkt || s !== ui.sym || !mc.bars.length || !(px > 0)) return;
+  const sec = ivSec(cfg.myIv), b0 = Math.floor(now() / 1000 / sec) * sec, L = mc.bars[mc.bars.length - 1];
+  if (b0 === L.t) { L.h = Math.max(L.h, px); L.l = Math.min(L.l, px); L.c = px; }
+  else if (b0 > L.t) mc.bars.push({ t: b0, o: px, h: px, l: px, c: px, v: 0 });
+  else return;
+  const X = mc.bars[mc.bars.length - 1];
+  mc.cs.update({ time: X.t + KSTS, open: X.o, high: X.h, low: X.l, close: X.c });
+  if (now() - mc.indT > 3000) { mc.indT = now(); calcInd(); }
+}
+function drawLines() {
+  if (!mc) return;
+  for (const l of mc.lines) mc.cs.removePriceLine(l);
+  mc.lines = [];
+  const st = view(), mk = ui.mkt, s = ui.sym;
+  if (!st) { mc.cs.setMarkers([]); return; }
+  const add = (price, color, title, style = 2, w = 1) => { if (price > 0) mc.lines.push(mc.cs.createPriceLine({ price, color, lineWidth: w, lineStyle: style, axisLabelVisible: true, title })); };
+  const A = cssv('--accent'), OK = cssv('--ok'), W = cssv('--sl'), UP = cssv('--up'), DN = cssv('--dn'), M = cssv('--mute');
+  if (mk === 'fut' && st.fut.pos[s]) {
+    const p = st.fut.pos[s];
+    add(p.entry, A, `${p.side === 'long' ? '롱' : '숏'} ${p.lev.toFixed(1)}x 진입`, 0, 2); add(p.sl, W, '손절'); add(p.tp, OK, '익절'); add(E.liqPrice(p), p.side === 'long' ? DN : UP, '청산가', 1);
+  }
+  if (mk === 'spot' && st.spot.hold[s]) { const h = st.spot.hold[s]; add(h.avg, A, '평균 단가', 0, 2); add(h.sl, W, '손절'); add(h.tp, OK, '익절'); }
+  for (const o of st.orders) if (o.status === 'open' && o.mkt === mk && o.sym === s) add(o.price, M, `${typeTxt(o)} ${sideTxt(o)}${o.lev ? ' ' + o.lev + 'x' : ''}`, 1);
+  const sec = ivSec(cfg.myIv), t0 = mc.bars.length ? mc.bars[0].t : 0;
+  const mks = st.fills.filter((f) => f.mkt === mk && f.sym === s && f.t / 1000 >= t0).map((f) => {
+    const upish = ['매수', '롱 진입', '숏 청산'].includes(f.side);
+    return { time: Math.floor(f.t / 1000 / sec) * sec + KSTS, position: upish ? 'belowBar' : 'aboveBar', color: upish ? UP : DN, shape: upish ? 'arrowUp' : 'arrowDown', text: f.side.replace(' 진입', '').replace('강제청산', '청산!') };
+  }).sort((a, b) => a.time - b.time);
+  mc.cs.setMarkers(mks);
+}
+function tickSize(px) {
+  if (ui.mkt === 'fut') return px >= 1000 ? 0.1 : px >= 10 ? 0.01 : px >= 1 ? 0.0001 : 0.00001;
+  return px >= 2e6 ? 1000 : px >= 1e6 ? 500 : px >= 5e5 ? 100 : px >= 1e5 ? 50 : px >= 1e4 ? 10 : px >= 1000 ? 1 : px >= 100 ? 0.1 : px >= 10 ? 0.01 : px >= 1 ? 0.001 : 0.0001;
+}
+function setPriceField(px) {
+  const t = tickSize(px), v = Math.round(px / t) * t, d = Math.max(0, -Math.floor(Math.log10(t) + 1e-9));
+  if (ui.otype === 'market') { ui.otype = 'limit'; renderForm(); }
+  const f = $('#fPrice'); if (f) { f.value = v.toFixed(d); updateCalc(); f.focus(); }
+}
+
 // ───────────────────────────── 위쪽 띠 · 종목
 function renderTop() {
   const st = view();
@@ -355,7 +480,7 @@ function renderTop() {
 }
 function renderChips() {
   $('#chips').innerHTML = SYMS.map((s) => `<button class="chip ${s === ui.sym ? 'on' : ''}" data-sym="${s}"><b>${s}</b><span class="num" data-px="${s}">–</span><span class="num" data-chg="${s}"></span></button>`).join('');
-  $$('#chips .chip').forEach((b) => b.onclick = () => { ui.sym = b.dataset.sym; renderChips(); mountTV(); renderForm(); paintOB(); });
+  $$('#chips .chip').forEach((b) => b.onclick = () => { ui.sym = b.dataset.sym; renderChips(); mountChart(); renderForm(); paintOB(); });
   for (const s of SYMS) paintTick(ui.mkt, s);
 }
 let topTimer = 0, tabTimer = 0;
@@ -365,7 +490,7 @@ function paintTick(mkt, s) {
     const a = $(`[data-px="${s}"]`), b = $(`[data-chg="${s}"]`);
     if (a) a.textContent = fpx(px, mkt);
     if (b && q.chg != null) { b.textContent = fpct(q.chg); b.className = 'num ' + cls(q.chg); }
-    if (s === ui.sym) updateCalc();
+    if (s === ui.sym) { updateCalc(); chartTick(mkt, s, px); }
   }
   const t = now();
   if (t - topTimer > 1000) { topTimer = t; renderTop(); }
@@ -497,7 +622,7 @@ function renderTabs() {
   const cnt = { pos: st ? Object.keys(st.spot.hold).length + Object.keys(st.fut.pos).length : 0, ord: st ? st.orders.filter((o) => o.status === 'open').length : 0, brief: BRIEFS.length };
   $('#tabs').innerHTML = TABS.map(([k, v]) => `<button data-tab="${k}" class="${ui.tab === k ? 'on' : ''}">${v}${cnt[k] ? `<span class="cnt num">${cnt[k]}</span>` : ''}</button>`).join('');
   $$('#tabs button').forEach((b) => b.onclick = () => { ui.tab = b.dataset.tab; renderTabs(); });
-  renderTabBody();
+  renderTabBody(); drawLines();
 }
 function renderTabBody() {
   const st = view(), body = $('#tabBody');
@@ -716,9 +841,9 @@ function tabSet(body) {
     try { const r = await gh(''); $('#sMsg').textContent = r.ok ? '연결됨' : `실패 (${r.status}) — 아이디·저장소·토큰 권한 확인`; if (r.ok) { await pullRemote(); await loadShared(); save(); } }
     catch (e) { $('#sMsg').textContent = '실패: ' + e.message; }
   };
-  $$('[data-st]', body).forEach((c) => c.onchange = () => { cfg.studies = $$('[data-st]', body).filter((x) => x.checked).map((x) => x.dataset.st); saveCfg(); mountTV(); });
-  $('#sIv').onchange = (e) => { cfg.interval = e.target.value; saveCfg(); mountTV(); };
-  $$('#sTheme button').forEach((b) => b.onclick = () => { cfg.theme = b.dataset.th; saveCfg(); applyTheme(); renderTabBody(); mountTV(); });
+  $$('[data-st]', body).forEach((c) => c.onchange = () => { cfg.studies = $$('[data-st]', body).filter((x) => x.checked).map((x) => x.dataset.st); saveCfg(); if (cfg.chart === 'tv') mountTV(); });
+  $('#sIv').onchange = (e) => { cfg.interval = e.target.value; saveCfg(); if (cfg.chart === 'tv') mountTV(); };
+  $$('#sTheme button').forEach((b) => b.onclick = () => { cfg.theme = b.dataset.th; saveCfg(); applyTheme(); renderTabBody(); mountChart(); });
   $('#sSetSave').onclick = () => { ME.setups = $('#sSetups').value.split(',').map((x) => x.trim()).filter(Boolean); save(); toast('저장했어요'); };
   $('#sExport').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(ME, null, 1)], { type: 'application/json' })); a.download = `desk-${new Date().toISOString().slice(0, 10)}.json`; a.click(); };
   $('#sReset').onclick = async () => {
@@ -740,18 +865,16 @@ function renderAll() {
 }
 function bind() {
   $$('#acctSeg button').forEach((b) => b.onclick = () => { ui.acct = b.dataset.acct; $$('#acctSeg button').forEach((x) => x.classList.toggle('on', x === b)); renderAll(); });
-  $$('#mktSeg button').forEach((b) => b.onclick = () => { ui.mkt = b.dataset.mkt; if (ui.mkt === 'fut') ui.side = 'buy'; $$('#mktSeg button').forEach((x) => x.classList.toggle('on', x === b)); renderAll(); mountTV(); });
-  matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => { if (cfg.theme === 'system') mountTV(); });
-  $('#ob').addEventListener('click', (e) => {
+  $$('#mktSeg button').forEach((b) => b.onclick = () => { ui.mkt = b.dataset.mkt; if (ui.mkt === 'fut') ui.side = 'buy'; $$('#mktSeg button').forEach((x) => x.classList.toggle('on', x === b)); renderAll(); mountChart(); });
+  matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => { if (cfg.theme === 'system') mountChart(); });
+  $('#ob').addEventListener('pointerdown', (e) => {     // 호가는 0.5초마다 다시 그려져서 click 이 끊길 수 있음 → 누르는 순간 반영
     const tr = e.target.closest('[data-obpx]'); if (!tr || readOnly()) return;
-    const px = +tr.dataset.obpx;
-    if (ui.otype === 'market') { ui.otype = 'limit'; renderForm(); }
-    const f = $('#fPrice'); if (f) { f.value = String(px); f.dispatchEvent(new Event('input')); f.focus(); }
+    e.preventDefault(); setPriceField(+tr.dataset.obpx);
   });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && caughtUp) { caughtUp = false; catchUpAll(); } });
 }
 async function start() {
-  applyTheme(); bind(); renderAll(); mountTV();
+  applyTheme(); bind(); renderAll(); mountChart();
   setSync(ghOn() ? 'wait' : '', ghOn() ? '저장소 확인 중' : '이 기기에만 저장 (설정에서 GitHub 연결)');
   upbitWS(); binanceWS();
   pollFut(); pollFutTicker(); setInterval(pollFut, 2000); setInterval(pollFutTicker, 20000);
