@@ -147,6 +147,14 @@ details.sec{border-top:1px solid var(--line);padding:10px 2px}details.sec>summar
 .legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--mute);margin-top:6px}.legend i{display:inline-block;width:12px;height:3px;border-radius:2px;margin-right:5px;vertical-align:middle}
 .drawbtn.on{background:var(--accbg)!important;color:var(--accent)!important}
 @media (max-width:1100px){.main{grid-template-columns:minmax(0,1fr) 300px}.obpane{display:none}}
+@media (max-width:760px){
+  /* 폰: 현물/선물 버튼은 한 줄 꽉 채우고, 종목은 4칸 격자(가로 스크롤 없이 한눈에) */
+  #symBar{flex-direction:column;align-items:stretch;gap:6px}
+  #mktSeg{display:grid;grid-template-columns:1fr 1fr}#mktSeg button{padding:8px 6px}
+  #chips{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;overflow:visible;padding:0}
+  #chips .chip{flex-direction:column;align-items:center;gap:1px;padding:7px 2px;min-width:0;white-space:normal;text-align:center}
+  #chips .chip b{font-size:14px}#chips .chip .num{font-size:11px;line-height:1.25;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+}
 @media (max-width:760px){.mk{grid-template-columns:1fr}.blist2{flex-direction:row;overflow-x:auto;max-height:none}.blist2 button{min-width:200px}.pnav button{font-size:13px}.main{grid-template-columns:1fr}#tvwrap{height:440px}.brief{grid-template-columns:1fr}.hide-s{display:none}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
@@ -172,7 +180,7 @@ details.sec{border-top:1px solid var(--line);padding:10px 2px}details.sec>summar
   </nav>
 
   <div class="page" id="pg-trade">
-  <div class="bar" style="padding:6px 8px">
+  <div class="bar" id="symBar" style="padding:6px 8px">
     <div class="seg" id="mktSeg"><button data-mkt="spot" class="on">현물 USDT · 바이낸스</button><button data-mkt="fut">선물 USDT · 바이낸스</button></div>
     <div class="chips grow" id="chips"></div>
   </div>
