@@ -552,11 +552,16 @@ function drawLines() {
   }).sort((a, b) => a.time - b.time);
   mc.mk.setMarkers(mks);
 }
-function tickSize(px) {
+function tickSize(px) {     // 바이낸스 호가 단위 (대략): 선물 BTC 0.1 · 현물 0.01 (예전 업비트 원화 단위표가 남아 있어 호가를 눌러도 반올림돼 안 바뀌던 문제 수정)
   if (ui.mkt === 'fut') return px >= 1000 ? 0.1 : px >= 10 ? 0.01 : px >= 1 ? 0.0001 : 0.00001;
-  return px >= 2e6 ? 1000 : px >= 1e6 ? 500 : px >= 5e5 ? 100 : px >= 1e5 ? 50 : px >= 1e4 ? 10 : px >= 1000 ? 1 : px >= 100 ? 0.1 : px >= 10 ? 0.01 : px >= 1 ? 0.001 : 0.0001;
+  return px >= 10 ? 0.01 : px >= 1 ? 0.0001 : px >= 0.01 ? 0.00001 : 1e-8;
 }
-function setPriceField(px) {
+function setPriceField(px, exact) {     // exact = 호가창에서 누른 가격 (이미 호가 단위라 그대로)
+  if (exact) {
+    if (ui.otype === 'market') { ui.otype = 'limit'; renderForm(); }
+    const f = $('#fPrice'); if (f) { f.value = String(px); updateCalc(); f.focus(); }
+    return;
+  }
   const t = tickSize(px), v = Math.round(px / t) * t, d = Math.max(0, -Math.floor(Math.log10(t) + 1e-9));
   if (ui.otype === 'market') { ui.otype = 'limit'; renderForm(); }
   const f = $('#fPrice'); if (f) { f.value = v.toFixed(d); updateCalc(); f.focus(); }
@@ -1149,7 +1154,7 @@ function bind() {
   matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => { if (cfg.theme === 'system') mountChart(); });
   $('#ob').addEventListener('pointerdown', (e) => {     // 호가는 0.5초마다 다시 그려져서 click 이 끊길 수 있음 → 누르는 순간 반영
     const tr = e.target.closest('[data-obpx]'); if (!tr || readOnly()) return;
-    e.preventDefault(); setPriceField(+tr.dataset.obpx);
+    e.preventDefault(); setPriceField(tr.dataset.obpx, true);
   });
   $$('#pnav button').forEach((b) => b.onclick = () => { const p = b.dataset.page; if (p === ui.page) return; history.pushState(null, '', p === 'trade' ? location.pathname + location.search : '#' + p); setPage(p); });
   window.addEventListener('popstate', () => setPage(location.hash.slice(1) || 'trade'));
