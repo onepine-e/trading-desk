@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
-/* 레이아웃: 위 = 계좌·종목 띠, 가운데 = 차트 | 호가 | 주문 (좁으면 세로로), 아래 = 탭 (포지션·주문·체결·일지·통계·브리핑·봇) */
+/* 레이아웃: 맨 위 = 계좌 띠, 그 아래 = 페이지 (거래 · 시황 · 성과 · 봇). 거래 = 종목 띠 + 차트 | 호가 | 주문 + 아래 탭 */
 :root{
   --bg:#f4f5f7;--panel:#ffffff;--panel2:#eef0f3;--line:#dfe3e8;--fg:#141820;--mute:#687280;
   --up:#d33a43;--dn:#1d6fe0;--upbg:rgba(211,58,67,.10);--dnbg:rgba(29,111,224,.10);--accent:#a86f00;--accbg:rgba(168,111,0,.10);
@@ -120,8 +120,34 @@ table.t td.wrap2{white-space:normal;min-width:180px;max-width:420px;text-align:l
 .set h3{margin:0;font-size:14px}
 canvas{max-width:100%}
 :focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.pnav{position:sticky;top:0;z-index:30;display:flex;gap:4px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:4px;box-shadow:0 2px 10px rgba(0,0,0,.06)}
+.pnav button{flex:1;max-width:170px;border:0;background:none;padding:9px 6px;border-radius:6px;font-weight:500;cursor:pointer;color:var(--mute);display:flex;gap:6px;align-items:center;justify-content:center}
+.pnav button.on{background:var(--accbg);color:var(--accent)}
+.pnav .badge{font-size:11px;background:var(--up);color:#fff;border-radius:8px;padding:0 6px;font-family:var(--num)}
+.page{display:flex;flex-direction:column;gap:8px}.page[hidden]{display:none}
+.pg{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px;min-width:0}
+.pg h2.pt{font-size:16px;margin:0 0 10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}.pg h2.pt small{font-weight:400;color:var(--mute);font-size:12px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+.tile{background:var(--panel2);border-radius:8px;padding:10px 12px;min-width:0}.tile small{display:block;color:var(--mute);font-size:12px}.tile b{font-size:20px;font-weight:500;display:block;line-height:1.3}.tile em{font-style:normal;font-size:12px;color:var(--mute)}
+.gauge{height:5px;border-radius:3px;background:linear-gradient(90deg,var(--dn),var(--mute),var(--up));position:relative;margin-top:6px}.gauge i{position:absolute;top:-3px;width:3px;height:11px;background:var(--fg);border-radius:2px}
+.mk{display:grid;grid-template-columns:270px minmax(0,1fr);gap:14px;align-items:start}
+.blist2{display:flex;flex-direction:column;gap:4px;max-height:75vh;overflow:auto}
+.blist2 button{display:block;width:100%;text-align:left;border:1px solid transparent;background:none;padding:8px 10px;border-radius:8px;cursor:pointer;color:var(--fg)}
+.blist2 button:hover{background:var(--panel2)}.blist2 button.on{background:var(--panel2);border-color:var(--line)}
+.blist2 .when{font-size:12px;color:var(--mute);display:flex;gap:6px;align-items:center}.blist2 .hl{font-size:13px;line-height:1.4;margin-top:2px}
+.tag{display:inline-block;border-radius:12px;padding:1px 9px;font-size:12px;margin:2px 4px 2px 0;background:var(--panel2);color:var(--fg);white-space:nowrap}
+.tag.up{background:var(--upbg);color:var(--up)}.tag.dn{background:var(--dnbg);color:var(--dn)}.tag.acc{background:var(--accbg);color:var(--accent)}.tag.sm{font-size:11px;padding:0 7px}
+.hero{border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:14px 16px;display:flex;flex-direction:column;gap:10px;margin-bottom:6px}
+.hero.m-up{border-left-color:var(--up)}.hero.m-dn{border-left-color:var(--dn)}
+.hero h2{margin:0;font-size:19px;line-height:1.35;text-wrap:balance}.hero ul{margin:0;padding-left:18px;line-height:1.6}
+.hero .hrow{display:grid;grid-template-columns:84px minmax(0,1fr);gap:4px 10px;font-size:13px;align-items:baseline}.hero .hrow>span:nth-child(odd){color:var(--mute);font-size:12px}
+details.sec{border-top:1px solid var(--line);padding:10px 2px}details.sec>summary{font-weight:600;cursor:pointer;font-size:15px;list-style-position:outside}details.sec .md{margin-top:6px}
+.cmp td b{font-weight:600}
+#perfChart{height:300px;margin-top:8px}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--mute);margin-top:6px}.legend i{display:inline-block;width:12px;height:3px;border-radius:2px;margin-right:5px;vertical-align:middle}
+.drawbtn.on{background:var(--accbg)!important;color:var(--accent)!important}
 @media (max-width:1100px){.main{grid-template-columns:minmax(0,1fr) 300px}.obpane{display:none}}
-@media (max-width:760px){.main{grid-template-columns:1fr}#tvwrap{height:440px}.brief{grid-template-columns:1fr}.hide-s{display:none}}
+@media (max-width:760px){.mk{grid-template-columns:1fr}.blist2{flex-direction:row;overflow-x:auto;max-height:none}.blist2 button{min-width:200px}.pnav button{font-size:13px}.main{grid-template-columns:1fr}#tvwrap{height:440px}.brief{grid-template-columns:1fr}.hide-s{display:none}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -141,6 +167,11 @@ canvas{max-width:100%}
     <div class="sync" id="feedStat"><span class="dot wait"></span><span>시세 연결 중</span></div>
   </div>
 
+  <nav class="pnav" id="pnav" aria-label="페이지">
+    <button data-page="trade" class="on">거래</button><button data-page="mkt">시황</button><button data-page="perf">성과</button><button data-page="bot">봇</button>
+  </nav>
+
+  <div class="page" id="pg-trade">
   <div class="bar" style="padding:6px 8px">
     <div class="seg" id="mktSeg"><button data-mkt="spot" class="on">현물 USDT · 바이낸스</button><button data-mkt="fut">선물 USDT · 바이낸스</button></div>
     <div class="chips grow" id="chips"></div>
@@ -162,11 +193,16 @@ canvas{max-width:100%}
     <div class="tabs" id="tabs"></div>
     <div class="tbody" id="tabBody"></div>
   </div>
+  </div>
+
+  <div class="page" id="pg-mkt" hidden></div>
+  <div class="page" id="pg-perf" hidden></div>
+  <div class="page" id="pg-bot" hidden></div>
 </div>
 <div class="toast" id="toast"></div>
 <div id="modalRoot"></div>
 <script src="https://s3.tradingview.com/tv.js"></script>
-<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<script src="https://unpkg.com/lightweight-charts@5.1.0/dist/lightweight-charts.standalone.production.js"></script>
 <script src="engine.js"></script>
 <script src="app.js"></script>
 </body>

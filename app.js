@@ -35,8 +35,8 @@ function migrateMe(m) {
 }
 let ME = migrateMe(LS.get('desk.me', null));
 let ME_SHA = LS.get('desk.me.sha', null);
-let CL = null, BRIEFS = [], BRIEF_TXT = {}, BOT = null, MKT = null;
-const ui = { acct: 'me', mkt: 'spot', sym: 'BTC', tab: 'pos', side: 'buy', otype: 'market', lev: 10, statMkt: 'fut', brief: null };
+let CL = null, BRIEFS = [], BRIEF_TXT = {}, BOT = null, MKT = null, REVIEWS = [], REV_TXT = {};
+const ui = { acct: 'me', mkt: 'spot', sym: 'BTC', tab: 'pos', side: 'buy', otype: 'market', lev: 10, statMkt: 'fut', brief: null, page: 'trade', rev: null, draw: null, drawA: null };
 const P = { spot: {}, fut: {} };
 for (const s of SYMS) { P.spot[s] = {}; P.fut[s] = {}; }
 let caughtUp = false, catchFail = false, btcFilter = null;
@@ -145,8 +145,13 @@ async function loadShared() {
   try { CL = (await ghJSON('desk/claude/state.json')).data; } catch { /* 아직 없음 */ }
   try { BRIEFS = (await ghJSON('desk/briefings/index.json')).data || []; } catch { BRIEFS = []; }
   try { MKT = (await ghJSON('desk/market.json')).data; } catch { MKT = null; }
+  try { REVIEWS = (await ghJSON('desk/reviews/index.json')).data || []; } catch { REVIEWS = []; }
   try { BOT = await loadBot(); } catch { BOT = null; }
   renderTabs(); renderTop(); if (readOnly()) renderForm();
+  renderNav();
+  const sig = [MKT?.t, BRIEFS.length, REVIEWS.length, CL?.updated, BOT?.rows.map((r) => r.last.time_kst).join()].join('|');
+  if (ui.page !== 'trade' && sig !== ui.sig) renderPage();       // 바뀐 게 있을 때만 다시 그림 (읽던 위치 유지)
+  ui.sig = sig;
 }
 async function loadBot() {
   const accts = ['A', 'B', 'C', 'D', 'H', 'F'], out = { rows: [], rec: [] };
@@ -155,7 +160,10 @@ async function loadBot() {
     const t = await ghText(`paper/${a}/equity.csv`).catch(() => null);
     if (!t) continue;
     const rows = parse(t); const last = rows[rows.length - 1];
-    out.rows.push({ a, last, hist: rows.map((r) => +r.equity).filter(isFinite) });
+    const tt = (r) => Date.parse(String(r.time_utc || '').replace(' ', 'T').replace(/(\.\d{3})\d+/, '$1'));
+    const tr = await ghText(`paper/${a}/trades.csv`).catch(() => null), sells = tr ? parse(tr).filter((x) => x.side === '매도') : [];
+    out.rows.push({ a, last, hist: rows.map((r) => +r.equity).filter(isFinite), pts: rows.map((r) => ({ t: tt(r), v: +r.equity })).filter((x) => isFinite(x.t) && isFinite(x.v)),
+      n: sells.length, win: sells.length ? sells.filter((x) => +x.pnl > 0).length / sells.length : null });
   }
   const rec = await ghText('paper/reconcile.csv').catch(() => null);
   if (rec) { const rr = parse(rec); const lastT = rr.length ? rr[rr.length - 1].time_kst : null; out.rec = rr.filter((r) => r.time_kst === lastT); }
@@ -360,15 +368,30 @@ const IVS = [['15', '15분'], ['60', '1시간'], ['240', '4시간'], ['D', '일'
 const ivSec = (iv) => iv === 'D' ? 86400 : +iv * 60;
 const cssv = (k) => getComputedStyle(document.documentElement).getPropertyValue(k).trim();
 let mc = null;
+const SUBS = [['', '보조 없음'], ['rsi', 'RSI'], ['macd', 'MACD']];
+const DRAW_C = '#9b7cf0';
 function renderChartBar() {
-  const my = cfg.chart === 'my';
+  const my = cfg.chart === 'my', I = cfg.myInd;
   $('#chartBar').innerHTML = `<div class="seg" id="chartSeg"><button data-c="my" class="${my ? 'on' : ''}">포지션 차트</button><button data-c="tv" class="${!my ? 'on' : ''}">트레이딩뷰</button></div>
     ${my ? `<div class="seg" id="ivSeg">${IVS.map(([k, v]) => `<button data-iv="${k}" class="${cfg.myIv === k ? 'on' : ''}">${v}</button>`).join('')}</div>
-    <label><input type="checkbox" id="indMa" ${cfg.myInd.ma ? 'checked' : ''}>이평 20</label><label><input type="checkbox" id="indBb" ${cfg.myInd.bb ? 'checked' : ''}>볼린저 20·2</label>
-    <span class="note" id="chartNote">차트를 누르면 그 가격이 주문창에 들어가요</span>` : '<span class="note">지표·그리기는 트레이딩뷰 · 내 진입선은 포지션 차트에서</span>'}`;
+    <label><input type="checkbox" id="indMa" ${I.ma ? 'checked' : ''}>이평 20</label><label><input type="checkbox" id="indBb" ${I.bb ? 'checked' : ''}>볼린저</label><label><input type="checkbox" id="indVol" ${I.vol !== false ? 'checked' : ''}>거래량</label>
+    <div class="seg" id="subSeg">${SUBS.map(([k, v]) => `<button data-sub="${k}" class="${(I.sub || '') === k ? 'on' : ''}">${v}</button>`).join('')}</div>
+    <div class="seg" id="drawSeg"><button data-d="h" class="drawbtn ${ui.draw === 'h' ? 'on' : ''}" title="차트를 누른 가격에 수평선">─ 수평선</button><button data-d="t" class="drawbtn ${ui.draw === 't' ? 'on' : ''}" title="두 점을 눌러 추세선 (오른쪽으로 연장)">╱ 추세선</button><button data-d="undo" title="마지막 선 지우기">↶</button><button data-d="clear" title="이 종목의 내 선 모두 지우기">지우기</button></div>
+    <span class="note" id="chartNote">${ui.draw === 'h' ? '수평선을 그을 가격을 누르세요' : ui.draw === 't' ? (ui.drawA ? '두 번째 점을 누르세요' : '추세선 첫 점을 누르세요') : '차트를 누르면 그 가격이 주문창에 들어가요'}</span>` : '<span class="note">지표·그리기는 트레이딩뷰 · 내 진입선·내 선은 포지션 차트에서</span>'}`;
   $$('#chartSeg button').forEach((b) => b.onclick = () => { cfg.chart = b.dataset.c; saveCfg(); mountChart(); });
   $$('#ivSeg button').forEach((b) => b.onclick = () => { cfg.myIv = b.dataset.iv; saveCfg(); mountChart(); });
-  if ($('#indMa')) { $('#indMa').onchange = (e) => { cfg.myInd.ma = e.target.checked; saveCfg(); calcInd(); }; $('#indBb').onchange = (e) => { cfg.myInd.bb = e.target.checked; saveCfg(); calcInd(); }; }
+  $$('#subSeg button').forEach((b) => b.onclick = () => { cfg.myInd.sub = b.dataset.sub; saveCfg(); mountChart(); });
+  $$('#drawSeg button').forEach((b) => b.onclick = () => {
+    const d = b.dataset.d, list = (ME.draw ||= {})[ui.sym] ||= [];
+    if (d === 'undo') { if (list.length) { list.pop(); save(); paintDrawings(); } else toast('지울 선이 없어요'); return; }
+    if (d === 'clear') { if (list.length) { ME.draw[ui.sym] = []; save(); paintDrawings(); toast(`${ui.sym} 의 내 선을 모두 지웠어요`); } return; }
+    ui.draw = ui.draw === d ? null : d; ui.drawA = null; renderChartBar();
+  });
+  if ($('#indMa')) {
+    $('#indMa').onchange = (e) => { cfg.myInd.ma = e.target.checked; saveCfg(); calcInd(); };
+    $('#indBb').onchange = (e) => { cfg.myInd.bb = e.target.checked; saveCfg(); calcInd(); };
+    $('#indVol').onchange = (e) => { cfg.myInd.vol = e.target.checked; saveCfg(); mountChart(); };
+  }
 }
 function mountChart() {
   renderChartBar();
@@ -383,12 +406,36 @@ function mountChart() {
     grid: { vertLines: { color: cssv('--line') }, horzLines: { color: cssv('--line') } }, rightPriceScale: { borderColor: cssv('--line') },
     timeScale: { borderColor: cssv('--line'), timeVisible: true, secondsVisible: false, rightOffset: 6 }, crosshair: { mode: 0 }, localization: { locale: 'ko-KR' },
   });
-  const cs = chart.addCandlestickSeries({ upColor: up, downColor: dn, borderVisible: false, wickUpColor: up, wickDownColor: dn, priceFormat: { type: 'custom', formatter: (p) => fpx(p, mk), minMove: 1e-8 } });
-  const vs = chart.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: 'vol', lastValueVisible: false, priceLineVisible: false });
-  chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.84, bottom: 0 } });
-  const line = (color, style) => chart.addLineSeries({ color, lineWidth: 1, lineStyle: style, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
-  mc = { chart, cs, vs, ma: line(cssv('--accent'), 0), bbU: line(cssv('--mute'), 2), bbL: line(cssv('--mute'), 2), lines: [], bars: [], key: `${mk}:${ui.sym}:${cfg.myIv}`, indT: 0 };
-  chart.subscribeClick((p) => { if (!p.point || readOnly() || !mc) return; const px = mc.cs.coordinateToPrice(p.point.y); if (px > 0) setPriceField(px); });
+  const cs = chart.addSeries(LC.CandlestickSeries, { upColor: up, downColor: dn, borderVisible: false, wickUpColor: up, wickDownColor: dn, priceFormat: { type: 'custom', formatter: (p) => fpx(p, mk), minMove: 1e-8 } });
+  const sub = cfg.myInd.sub || '', showVol = cfg.myInd.vol !== false;
+  // 위 칸 = 캔들 + 거래량(아래쪽 겹침), 보조지표는 아래 칸 (자기 가격 축)
+  chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.06, bottom: showVol ? 0.16 : 0.04 } });
+  const vs = chart.addSeries(LC.HistogramSeries, { priceFormat: { type: 'volume' }, priceScaleId: 'vol', lastValueVisible: false, priceLineVisible: false, visible: showVol });
+  chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.86, bottom: 0 } });
+  const line = (color, style, pane = 0) => chart.addSeries(LC.LineSeries, { color, lineWidth: 1, lineStyle: style, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }, pane);
+  mc = { chart, cs, vs, mk: LC.createSeriesMarkers(cs, []), ma: line(cssv('--accent'), 0), bbU: line(cssv('--mute'), 2), bbL: line(cssv('--mute'), 2), lines: [], bars: [], key: `${mk}:${ui.sym}:${cfg.myIv}`, indT: 0, dLines: [], dSeries: [] };
+  if (sub) {
+    const fmt = { type: 'price', precision: sub === 'rsi' ? 1 : 4, minMove: sub === 'rsi' ? 0.1 : 0.0001 };
+    mc.sub = { k: sub, a: chart.addSeries(LC.LineSeries, { color: cssv('--accent'), lineWidth: 1, priceLineVisible: false, lastValueVisible: true, priceFormat: fmt }, 1) };
+    if (sub === 'macd') { mc.sub.b = line(cssv('--mute'), 0, 1); mc.sub.h = chart.addSeries(LC.HistogramSeries, { priceLineVisible: false, lastValueVisible: false, priceFormat: fmt }, 1); }
+    if (sub === 'rsi') for (const v of [70, 30]) mc.sub.a.createPriceLine({ price: v, color: cssv('--mute'), lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '' });
+    const P = chart.panes(); if (P.length > 1) { P[0].setStretchFactor(3); P[1].setStretchFactor(1); }
+  }
+  chart.subscribeClick((p) => {
+    if (!p.point || !mc || (p.paneIndex ?? 0) > 0) return;      // 보조지표 칸을 누른 건 무시
+    const px = mc.cs.coordinateToPrice(p.point.y); if (!(px > 0)) return;
+    if (ui.draw === 'h') { addDrawing({ k: 'h', p: px }); ui.draw = null; renderChartBar(); return; }
+    if (ui.draw === 't') {
+      let ct = p.time ?? mc.chart.timeScale().coordinateToTime(p.point.x);
+      if (ct == null && mc.bars.length) ct = mc.bars[mc.bars.length - 1].t + KSTS;
+      if (ct == null) return;
+      const t = ct - KSTS;
+      if (!ui.drawA) { ui.drawA = [t, px]; renderChartBar(); return; }
+      if (Math.abs(t - ui.drawA[0]) < ivSec(cfg.myIv)) { toast('같은 봉이에요 — 다른 봉을 눌러 주세요'); return; }
+      addDrawing({ k: 't', a: ui.drawA, b: [t, px] }); ui.draw = null; ui.drawA = null; renderChartBar(); return;
+    }
+    if (!readOnly()) setPriceField(px);
+  });
   loadBars();
 }
 const BIV = { 15: '15m', 60: '1h', 240: '4h', D: '1d' };
@@ -409,7 +456,7 @@ async function loadBars() {
   const ub = cssv('--upbg'), db = cssv('--dnbg');
   mc.vs.setData(bars.map((b) => ({ time: b.t + KSTS, value: b.v, color: b.c >= b.o ? ub : db })));
   if ($('#chartNote')) $('#chartNote').textContent = note;
-  calcInd(); drawLines(); mc.chart.timeScale().scrollToRealTime();
+  calcInd(); drawLines(); paintDrawings(); mc.chart.timeScale().scrollToRealTime();
 }
 function calcInd() {
   if (!mc) return;
@@ -420,6 +467,59 @@ function calcInd() {
     ma.push({ time, value: m }); up.push({ time, value: m + 2 * sd }); lo.push({ time, value: m - 2 * sd });
   }
   mc.ma.setData(cfg.myInd.ma ? ma : []); mc.bbU.setData(cfg.myInd.bb ? up : []); mc.bbL.setData(cfg.myInd.bb ? lo : []);
+  if (mc.sub) {
+    const C = B.map((b) => b.c), T = B.map((b) => b.t + KSTS);
+    if (mc.sub.k === 'rsi') mc.sub.a.setData(rsi(C, 14).map((v, i) => v == null ? null : { time: T[i], value: v }).filter(Boolean));
+    else {
+      const e12 = ema(C, 12), e26 = ema(C, 26), m = C.map((_, i) => e12[i] != null && e26[i] != null ? e12[i] - e26[i] : null);
+      const sig = ema(m, 9), UP = cssv('--upbg'), DN = cssv('--dnbg');
+      mc.sub.a.setData(m.map((v, i) => v == null ? null : { time: T[i], value: v }).filter(Boolean));
+      mc.sub.b.setData(sig.map((v, i) => v == null ? null : { time: T[i], value: v }).filter(Boolean));
+      mc.sub.h.setData(m.map((v, i) => v == null || sig[i] == null ? null : { time: T[i], value: v - sig[i], color: v - sig[i] >= 0 ? UP : DN }).filter(Boolean));
+    }
+  }
+}
+// 보조지표 계산 (값이 없는 앞부분은 null)
+function ema(a, n) {
+  const out = new Array(a.length).fill(null), k = 2 / (n + 1); let e = null, cnt = 0, sum = 0;
+  for (let i = 0; i < a.length; i++) {
+    const v = a[i]; if (v == null) continue;
+    if (e == null) { sum += v; cnt++; if (cnt === n) { e = sum / n; out[i] = e; } continue; }
+    e = v * k + e * (1 - k); out[i] = e;
+  }
+  return out;
+}
+function rsi(c, n) {      // 와일더 RSI
+  const out = new Array(c.length).fill(null); let g = 0, l = 0;
+  for (let i = 1; i < c.length; i++) {
+    const d = c[i] - c[i - 1], up = Math.max(d, 0), dn = Math.max(-d, 0);
+    if (i <= n) { g += up; l += dn; if (i === n) { g /= n; l /= n; out[i] = l === 0 ? 100 : 100 - 100 / (1 + g / l); } continue; }
+    g = (g * (n - 1) + up) / n; l = (l * (n - 1) + dn) / n; out[i] = l === 0 ? 100 : 100 - 100 / (1 + g / l);
+  }
+  return out;
+}
+// 내가 그린 선 (종목별, 내 계좌 기록에 저장 → 다른 기기에서도 보임)
+function addDrawing(d) { ((ME.draw ||= {})[ui.sym] ||= []).push(d); save(); paintDrawings(); }
+function paintDrawings() {
+  if (!mc) return;
+  for (const l of mc.dLines) mc.cs.removePriceLine(l);
+  for (const x of mc.dSeries) mc.chart.removeSeries(x);
+  mc.dLines = []; mc.dSeries = [];
+  const list = (ME.draw && ME.draw[ui.sym]) || [], B = mc.bars;
+  if (!B.length) return;
+  const sec = ivSec(cfg.myIv), first = B[0].t, last = B[B.length - 1].t, snap = (t) => Math.floor(t / sec) * sec;
+  for (const d of list) {
+    if (d.k === 'h') { mc.dLines.push(mc.cs.createPriceLine({ price: d.p, color: DRAW_C, lineWidth: 1, lineStyle: 0, axisLabelVisible: true, title: '내 선' })); continue; }
+    let [ta, pa] = d.a, [tb, pb] = d.b; if (ta > tb) [ta, pa, tb, pb] = [tb, pb, ta, pa];
+    ta = snap(ta); tb = snap(tb); if (ta === tb) continue;
+    const at = (t) => pa + (pb - pa) * (t - ta) / (tb - ta);
+    const t0 = Math.max(ta, first), t1 = Math.max(last, tb);
+    if (t1 <= t0) continue;
+    const pts = [[t0, at(t0)], ...(tb > t0 && tb < t1 ? [[tb, pb]] : []), [t1, at(t1)]];
+    const ser = mc.chart.addSeries(LC.LineSeries, { color: DRAW_C, lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null });
+    ser.setData(pts.map(([t, v]) => ({ time: t + KSTS, value: v })));
+    mc.dSeries.push(ser);
+  }
 }
 function chartTick(mkt, s, px) {
   if (!mc || cfg.chart !== 'my' || mkt !== ui.mkt || s !== ui.sym || !mc.bars.length || !(px > 0)) return;
@@ -436,7 +536,7 @@ function drawLines() {
   for (const l of mc.lines) mc.cs.removePriceLine(l);
   mc.lines = [];
   const st = view(), mk = ui.mkt, s = ui.sym;
-  if (!st) { mc.cs.setMarkers([]); return; }
+  if (!st) { mc.mk.setMarkers([]); return; }
   const add = (price, color, title, style = 2, w = 1) => { if (price > 0) mc.lines.push(mc.cs.createPriceLine({ price, color, lineWidth: w, lineStyle: style, axisLabelVisible: true, title })); };
   const A = cssv('--accent'), OK = cssv('--ok'), W = cssv('--sl'), UP = cssv('--up'), DN = cssv('--dn'), M = cssv('--mute');
   if (mk === 'fut' && st.fut.pos[s]) {
@@ -450,7 +550,7 @@ function drawLines() {
     const upish = ['매수', '롱 진입', '숏 청산'].includes(f.side);
     return { time: Math.floor(f.t / 1000 / sec) * sec + KSTS, position: upish ? 'belowBar' : 'aboveBar', color: upish ? UP : DN, shape: upish ? 'arrowUp' : 'arrowDown', text: f.side.replace(' 진입', '').replace('강제청산', '청산!') };
   }).sort((a, b) => a.time - b.time);
-  mc.cs.setMarkers(mks);
+  mc.mk.setMarkers(mks);
 }
 function tickSize(px) {
   if (ui.mkt === 'fut') return px >= 1000 ? 0.1 : px >= 10 ? 0.01 : px >= 1 ? 0.0001 : 0.00001;
@@ -613,10 +713,10 @@ async function submit(side) {
 }
 
 // ───────────────────────────── 아래 탭
-const TABS = [['pos', '포지션'], ['ord', '대기 주문'], ['fill', '체결'], ['jr', '매매 일지'], ['stat', '통계'], ['brief', '시황'], ['bot', '봇 계좌'], ['set', '설정']];
+const TABS = [['pos', '포지션'], ['ord', '대기 주문'], ['fill', '체결'], ['jr', '매매 일지'], ['stat', '통계'], ['set', '설정']];
 function renderTabs() {
   const st = view();
-  const cnt = { pos: st ? Object.keys(st.spot.hold).length + Object.keys(st.fut.pos).length : 0, ord: st ? st.orders.filter((o) => o.status === 'open').length : 0, brief: BRIEFS.length };
+  const cnt = { pos: st ? Object.keys(st.spot.hold).length + Object.keys(st.fut.pos).length : 0, ord: st ? st.orders.filter((o) => o.status === 'open').length : 0 };
   $('#tabs').innerHTML = TABS.map(([k, v]) => `<button data-tab="${k}" class="${ui.tab === k ? 'on' : ''}">${v}${cnt[k] ? `<span class="cnt num">${cnt[k]}</span>` : ''}</button>`).join('');
   $$('#tabs button').forEach((b) => b.onclick = () => { ui.tab = b.dataset.tab; renderTabs(); });
   renderTabBody(); drawLines();
@@ -625,7 +725,7 @@ function renderTabBody() {
   const st = view(), body = $('#tabBody');
   const needSt = ['pos', 'ord', 'fill', 'jr', 'stat'].includes(ui.tab);
   if (needSt && !st) { body.innerHTML = '<div class="empty">Claude 계좌 기록이 아직 없어요. 설정에서 GitHub 를 연결하면 불러와요.</div>'; return; }
-  ({ pos: tabPos, ord: tabOrd, fill: tabFill, jr: tabJr, stat: tabStat, brief: tabBrief, bot: tabBot, set: tabSet })[ui.tab](body, st);
+  ({ pos: tabPos, ord: tabOrd, fill: tabFill, jr: tabJr, stat: tabStat, set: tabSet })[ui.tab](body, st);
 }
 function tabPos(body, st) {
   const pr = prices(), ro = readOnly();
@@ -772,21 +872,6 @@ function md(t) {
   }
   return out + (inT ? '</table></div>' : '') + (inL ? '</ul>' : '');
 }
-async function tabBrief(body) {
-  if (!ghOn()) { body.innerHTML = '<div class="empty">시황은 GitHub 저장소(desk/market.json · desk/briefings)에서 읽어요. 설정에서 GitHub 를 연결해 주세요.</div>'; return; }
-  const num = MKT?.brief_md ? { id: 'num', t: MKT.t, title: '숫자 시황 (4시간마다 자동)', num: true } : null;
-  const list = BRIEFS.slice().sort((a, b) => b.t - a.t);
-  if (!num && !list.length) { body.innerHTML = '<div class="empty">아직 시황이 없어요. 숫자 시황은 가상매매 봇이 다음에 돌 때(4시간마다), 글 브리핑은 하루 두 번(09:20 · 21:20) 여기에 쌓여요.</div>'; return; }
-  const all = (num ? [num] : []).concat(list);
-  ui.brief = ui.brief && all.some((x) => x.id === ui.brief) ? ui.brief : (list[0] || num).id;
-  const cur = all.find((x) => x.id === ui.brief);
-  const kindTxt = (x) => x.num ? '' : x.kind === 'evening' ? '저녁 · ' : x.kind === 'morning' ? '아침 · ' : '';
-  body.innerHTML = `<div class="brief"><div class="blist">${all.slice(0, 41).map((x) => `<button data-b="${esc(x.id)}" class="${x.id === cur.id ? 'on' : ''}${x.num ? ' bnum' : ''}"><div class="num" style="font-size:12px">${kindTxt(x)}${ftime(x.t)}</div>${esc(x.title || '')}</button>`).join('')}</div><div class="md" id="briefMd">불러오는 중…</div></div>`;
-  $$('[data-b]', body).forEach((b) => b.onclick = () => { ui.brief = b.dataset.b; renderTabBody(); });
-  if (cur.num) { $('#briefMd').innerHTML = md(MKT.brief_md); return; }
-  if (!BRIEF_TXT[cur.id]) BRIEF_TXT[cur.id] = await ghText(cur.path).catch(() => '불러오지 못했어요');
-  if ($('#briefMd')) $('#briefMd').innerHTML = md(BRIEF_TXT[cur.id] || '불러오지 못했어요');
-}
 function tabBot(body) {
   if (!ghOn()) { body.innerHTML = '<div class="empty">가상매매 봇(tsb7-paper) 기록을 읽으려면 설정에서 GitHub 를 연결해 주세요.</div>'; return; }
   if (!BOT || !BOT.rows.length) { body.innerHTML = '<div class="empty">봇 기록을 찾지 못했어요 (paper/*/equity.csv).</div>'; return; }
@@ -860,6 +945,197 @@ function tabSet(body) {
   };
 }
 
+// ───────────────────────────── 페이지 (거래 · 시황 · 성과 · 봇) — 위쪽 탭으로 넘김, 주소 #mkt 처럼 남아서 새로고침해도 그 페이지
+const PAGES = ['trade', 'mkt', 'perf', 'bot'];
+function setPage(p) {
+  if (!PAGES.includes(p)) p = 'trade';
+  ui.page = p;
+  for (const k of PAGES) $('#pg-' + k).hidden = k !== p;
+  $$('#pnav button').forEach((b) => b.classList.toggle('on', b.dataset.page === p));
+  if (p === 'mkt' && BRIEFS.length) { cfg.seenBrief = Math.max(...BRIEFS.map((x) => x.t)); saveCfg(); }
+  if (p === 'perf' && REVIEWS.length) { cfg.seenRev = Math.max(...REVIEWS.map((x) => x.t)); saveCfg(); }
+  renderNav(); renderPage(); window.scrollTo({ top: 0 });
+}
+function renderNav() {
+  const nb = BRIEFS.filter((x) => x.t > (cfg.seenBrief || 0)).length, nr = REVIEWS.filter((x) => x.t > (cfg.seenRev || 0)).length;
+  const lab = { trade: '거래', mkt: '시황', perf: '성과', bot: '봇' }, cnt = { mkt: ui.page === 'mkt' ? 0 : nb, perf: ui.page === 'perf' ? 0 : nr };
+  $$('#pnav button').forEach((b) => { const k = b.dataset.page; b.innerHTML = lab[k] + (cnt[k] ? `<span class="badge" title="새 글">${cnt[k]}</span>` : ''); });
+}
+function renderPage() {
+  if (ui.page === 'mkt') pageMkt($('#pg-mkt'));
+  else if (ui.page === 'perf') pagePerf($('#pg-perf'));
+  else if (ui.page === 'bot') { const el = $('#pg-bot'); el.innerHTML = '<div class="pg"><h2 class="pt">TSB7 가상매매 봇 <small>업비트 원화 · 4시간봉 마감마다</small></h2><div class="tbody" style="padding:0" id="botBody"></div></div>'; tabBot($('#botBody')); }
+}
+const needGH = (el, what) => { el.innerHTML = `<div class="pg"><div class="empty">${what}은(는) GitHub 저장소에서 읽어요. 거래 → 설정에서 GitHub 를 연결해 주세요.</div></div>`; };
+const KIND = { morning: '아침', evening: '저녁', review: '주간' };
+const moodCls = (m) => m === '강세' ? 'up' : m === '약세' ? 'dn' : 'acc';
+const pc1 = (v) => v == null || !isFinite(v) ? '–' : `<span class="${cls(v)}">${(v > 0 ? '+' : '') + (v * 100).toFixed(1)}%</span>`;
+const usdShort = (v) => v == null || !isFinite(v) ? '–' : v >= 1e12 ? (v / 1e12).toFixed(2) + '조$' : v >= 1e8 ? Math.round(v / 1e8).toLocaleString('ko-KR') + '억$' : v >= 1e6 ? Math.round(v / 1e6) + '백만$' : Math.round(v) + '$';
+
+// ── 시황
+function numTiles() {
+  if (!MKT) return '<div class="empty">숫자 시황이 아직 없어요. 가상매매 봇이 다음에 돌 때(4시간마다) 만들어져요.</div>';
+  const x = MKT.extra || {}, b = MKT.coins?.BTC || {}, f = MKT.btc_filter, T = [];
+  if (x.fng) T.push(`<div class="tile"><small>공포·탐욕</small><b>${x.fng.now} <em>${esc(x.fng.label)}</em></b><div class="gauge"><i style="left:calc(${x.fng.now}% - 1px)"></i></div><em>어제 ${x.fng.yday}${x.fng.week ? ' · 1주 전 ' + x.fng.week : ''}</em></div>`);
+  if (b.usd) T.push(`<div class="tile"><small>BTC (바이낸스)</small><b class="num">${fpx(b.usd)}</b><em>24시간 ${pc1(b.chg24h)} · 7일 ${pc1(b.chg7d)}</em></div>`);
+  if (f) T.push(`<div class="tile"><small>BTC 50일선 필터</small><b class="${f.on ? 'up' : 'dn'}">${f.on ? '켜짐' : '꺼짐'}</b><em>50일선 대비 ${pc1(f.gap)}</em></div>`);
+  if (x.global) T.push(`<div class="tile"><small>BTC 점유율</small><b class="num">${(x.global.btcDom * 100).toFixed(1)}%</b><em>전체 ${usdShort(x.global.mcap)} ${pc1(x.global.chg24h)}</em></div>`);
+  if (x.movers) T.push(`<div class="tile"><small>오른 종목 비율</small><b class="num ${x.movers.breadth >= 0.5 ? 'up' : 'dn'}">${Math.round(x.movers.breadth * 100)}%</b><em>바이낸스 ${x.movers.n}개 중</em></div>`);
+  if (x.kimp && b.usd && x.kimp.coins.BTC) { const k = x.kimp.coins.BTC / (b.usd * x.kimp.fx) - 1; T.push(`<div class="tile"><small>김프 (BTC)</small><b class="num">${pc1(k)}</b><em>테더 ${Math.round(x.kimp.usdt).toLocaleString('ko-KR')}원 · 환율 ${x.kimp.fx.toFixed(0)}</em></div>`); }
+  return `<div class="tiles">${T.join('')}</div>`;
+}
+function numTables() {
+  if (!MKT) return '<div class="empty">숫자 시황이 아직 없어요.</div>';
+  const x = MKT.extra; if (!x) return `<div class="md">${md(MKT.brief_md || '')}</div>`;
+  const perp = x.perp?.majors || {}, out = [];
+  out.push(`<h3>메이저</h3><div class="tbody" style="padding:0"><table class="t"><thead><tr><th class="l">종목</th><th>가격 ($)</th><th>24시간</th><th>7일</th><th title="TSB7 진입선 = 직전 20일 최고가">20일 고점까지</th><th>펀딩 (8h)</th><th>미결제약정</th></tr></thead><tbody>${Object.entries(MKT.coins || {}).map(([s, c]) => c.error ? `<tr><td class="l"><b>${s}</b></td><td colspan="6" class="mute">못 가져옴</td></tr>` :
+    `<tr><td class="l"><b>${s}</b></td><td class="num">${fpx(c.usd)}</td><td class="num">${pc1(c.chg24h)}</td><td class="num">${pc1(c.chg7d)}</td><td class="num">${c.tsb7.gap_to_entry <= 0 ? '<span class="tag up sm">돌파</span>' : (c.tsb7.gap_to_entry * 100).toFixed(1) + '%'}</td><td class="num">${perp[s] ? (perp[s].f8 * 100).toFixed(3) + '%' : '–'}</td><td class="num">${perp[s] ? usdShort(perp[s].oi) : '–'}</td></tr>`).join('')}</tbody></table></div>`);
+  if (x.movers) {
+    const li = (a) => a.map((d) => `<tr><td class="l"><b>${esc(d.sym)}</b></td><td class="num">${pc1(d.chg)}</td><td class="num mute">${usdShort(d.vol)}</td></tr>`).join('');
+    out.push(`<h3>24시간 등락 상위 <small class="mute">바이낸스 현물, 거래대금 5백만$ 이상</small></h3><div class="tiles" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr))"><table class="t"><thead><tr><th class="l">상승</th><th>24시간</th><th>거래대금</th></tr></thead><tbody>${li(x.movers.up.slice(0, 8))}</tbody></table><table class="t"><thead><tr><th class="l">하락</th><th>24시간</th><th>거래대금</th></tr></thead><tbody>${li(x.movers.down.slice(0, 8))}</tbody></table></div>
+      <p class="note">거래대금 상위: ${x.movers.vol.map((d) => `<span class="tag sm ${cls(d.chg)}">${esc(d.sym)} ${(d.chg > 0 ? '+' : '') + (d.chg * 100).toFixed(1)}%</span>`).join('')}</p>`);
+  }
+  const T = MKT.sectorTrend;
+  if (T) {
+    const st = (n) => !n ? '–' : `<span class="${n > 0 ? 'up' : 'dn'}">${n > 0 ? '▲' : '▼'}${Math.abs(n)}일</span>`;
+    const tb = (a, lab) => `<table class="t"><thead><tr><th class="l">${lab}</th><th>24시간</th><th>3일</th><th>7일</th><th>연속</th><th>시총</th></tr></thead><tbody>${a.map((r) => `<tr><td class="l">${esc(r.name)}</td><td class="num">${pc1(r.c1)}</td><td class="num">${pc1(r.c3)}</td><td class="num">${pc1(r.c7)}</td><td class="num">${st(r.streak)}</td><td class="num mute">${usdShort(r.mcap)}</td></tr>`).join('')}</tbody></table>`;
+    out.push(`<h3>섹터 <small class="mute">CoinGecko 테마 · ${T.key === 'c3' ? '3일 변화 순' : '24시간 변화 순'} · 기록 ${T.days}일째</small></h3><div class="tbody" style="padding:0">${tb(T.up.slice(0, 6), '강한 섹터')}</div><div class="tbody" style="padding:0;margin-top:8px">${tb(T.down.slice(0, 6), '약한 섹터')}</div>${T.days < 4 ? `<p class="note">3일·7일 변화와 연속 일수는 하루 한 줄씩 쌓는 기록으로 계산해요 (지금 ${T.days}일째).</p>` : ''}`);
+  }
+  if (x.perp) out.push(`<h3>펀딩 쏠림 <small class="mute">Hyperliquid, 미결제약정 2천만$ 이상, 8시간 환산</small></h3><p>${x.perp.hot.map((d) => `<span class="tag up">${esc(d.sym)} ${(d.f8 * 100).toFixed(3)}%</span>`).join('')}</p><p>${x.perp.cold.map((d) => `<span class="tag dn">${esc(d.sym)} ${(d.f8 * 100).toFixed(3)}%</span>`).join('')}</p><p class="note">빨강 = 롱이 돈을 내며 버티는 쪽(롱 과열), 파랑 = 숏 과열</p>`);
+  const err = Object.keys(x.errors || {}); if (err.length) out.push(`<p class="note">못 가져온 항목: ${err.join(', ')} (다음 실행 때 다시 시도)</p>`);
+  return `<div class="md" style="max-width:none">${out.join('')}</div>`;
+}
+function splitMd(txt) {      // '# 제목' + '## 절' 들로 나눔
+  const L = String(txt || '').replace(/\r/g, '').split('\n'), secs = []; let title = '', cur = null;
+  for (const l of L) {
+    const h1 = l.match(/^# (.+)/), h2 = l.match(/^## (.+)/);
+    if (h1 && !title) { title = h1[1]; continue; }
+    if (h2) { cur = { h: h2[1].trim(), body: [] }; secs.push(cur); continue; }
+    if (cur) cur.body.push(l); else if (l.trim()) (secs[0]?.h === '' ? secs[0] : (secs.unshift({ h: '', body: [] }), secs[0])).body.push(l);
+  }
+  return { title, secs: secs.map((x) => ({ h: x.h, body: x.body.join('\n').trim() })) };
+}
+function heroHtml(e, doc) {
+  const S = e.summary || {}, glance = doc.secs.find((x) => /한눈에/.test(x.h));
+  const pts = S.points?.length ? S.points : glance ? glance.body.split('\n').filter((l) => /^\s*[-*] /.test(l)).map((l) => l.replace(/^\s*[-*] /, '')) : [];
+  const inl = (t) => md(t).replace(/^<p>|<\/p>$/g, '');
+  const rows = [];
+  if (S.mood) rows.push(['분위기', `<span class="tag ${moodCls(S.mood)}">${esc(S.mood)}</span>`]);
+  if (S.strong?.length) rows.push(['강한 쪽', S.strong.map((x) => `<span class="tag up">${esc(x)}</span>`).join('')]);
+  if (S.weak?.length) rows.push(['약한 쪽', S.weak.map((x) => `<span class="tag dn">${esc(x)}</span>`).join('')]);
+  if (S.watch?.length) rows.push(['볼 것', S.watch.map((x) => `<div>· ${esc(x)}</div>`).join('')]);
+  if (S.claude) rows.push(['Claude 계좌', `<span class="tag acc">${esc(S.claude)}</span> ${esc(S.claude_note || '')}`]);
+  if (S.grade) rows.push(['과정 점수', `<span class="tag acc">${esc(S.grade)}</span>`]);
+  if (S.focus) rows.push(['다음 주 과제', `<b>${esc(S.focus)}</b>`]);
+  return `<div class="hero ${S.mood ? 'm-' + moodCls(S.mood) : ''}"><div class="note">${KIND[e.kind] || ''} · ${ftime(e.t)}</div><h2>${esc(S.headline || doc.title || e.title || '')}</h2>
+    ${S.headline && doc.title ? `<div class="note">${esc(doc.title)}</div>` : ''}
+    ${pts.length ? `<ul>${pts.map((p) => `<li>${inl(p)}</li>`).join('')}</ul>` : ''}
+    ${rows.length ? `<div class="hrow">${rows.map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join('')}</div>` : ''}</div>`;
+}
+function docHtml(e, txt) {
+  const doc = splitMd(txt);
+  const pre = doc.secs.find((x) => x.h === ''), secs = doc.secs.filter((x) => x.h && x.body && !/한눈에/.test(x.h));
+  return heroHtml(e, doc) + (pre && pre.body ? `<div class="md note" style="margin:4px 2px 8px">${md(pre.body)}</div>` : '') + secs.map((x) => `<details class="sec" ${/출처/.test(x.h) ? '' : 'open'}><summary>${esc(x.h || '본문')}</summary><div class="md">${md(x.body)}</div></details>`).join('');
+}
+function listItem(e, on) {
+  if (e.id === 'num') return `<button data-b="num" class="${on ? 'on' : ''}"><div class="when"><span class="tag acc sm">표</span>${MKT ? ftime(MKT.t) : ''}</div><div class="hl">숫자 시황 자세히 — 메이저·등락·섹터·펀딩</div></button>`;
+  const S = e.summary || {};
+  return `<button data-b="${esc(e.id)}" class="${on ? 'on' : ''}"><div class="when"><span class="tag sm">${KIND[e.kind] || '글'}</span>${ftime(e.t)}${S.mood ? `<span class="tag sm ${moodCls(S.mood)}">${esc(S.mood)}</span>` : ''}${S.claude && S.claude !== '관망' ? `<span class="tag sm acc">Claude ${esc(S.claude)}</span>` : ''}</div><div class="hl">${esc(S.headline || e.title || '')}</div></button>`;
+}
+async function pageMkt(el) {
+  if (!ghOn()) return needGH(el, '시황');
+  const list = BRIEFS.slice().sort((a, b) => b.t - a.t);
+  if (!ui.brief || (ui.brief !== 'num' && !list.some((x) => x.id === ui.brief))) ui.brief = list[0]?.id || 'num';
+  el.innerHTML = `<div class="pg"><h2 class="pt">숫자 시황 <small>${MKT ? ftime(MKT.t) + ' 기준 · 4시간마다 자동' : ''}</small></h2>${numTiles()}</div>
+    <div class="pg mk"><div class="blist2" id="blist">${[{ id: 'num' }].concat(list).slice(0, 61).map((x) => listItem(x, x.id === ui.brief)).join('')}</div><div id="bview" style="min-width:0;max-width:820px"></div></div>
+    ${list.length ? '' : '<div class="pg"><div class="empty">글 브리핑은 매일 09:20 (아침) · 21:20 (저녁)에 올라와요.</div></div>'}`;
+  $$('#blist [data-b]').forEach((b) => b.onclick = () => { ui.brief = b.dataset.b; pageMkt(el); });
+  const v = $('#bview');
+  if (ui.brief === 'num') { v.innerHTML = numTables(); return; }
+  const e = list.find((x) => x.id === ui.brief);
+  v.innerHTML = '<div class="empty">불러오는 중…</div>';
+  if (BRIEF_TXT[e.id] == null) BRIEF_TXT[e.id] = await ghText(e.path).catch(() => null);
+  if (ui.brief !== e.id || !$('#bview')) return;
+  $('#bview').innerHTML = BRIEF_TXT[e.id] == null ? '<div class="empty">불러오지 못했어요</div>' : docHtml(e, BRIEF_TXT[e.id]);
+}
+
+// ── 성과: 세 계좌 비교 + 주간 평가
+function mdd(vals) { let pk = -Infinity, m = 0; for (const v of vals) { pk = Math.max(pk, v); if (pk > 0) m = Math.min(m, v / pk - 1); } return m; }
+function acctSeries(st, hist, livePx) {     // 합계(현물+선물) 평가액 시계열 + 지금
+  if (!st) return null;
+  const init = (st.init.spot ?? st.init.krw ?? 0) + (st.init.usdt ?? 0);
+  const pts = [{ t: st.created || 0, v: init }].concat((hist || []).map((r) => ({ t: r.t, v: r.spot + r.fut })));
+  const eq = E.equity(st, livePx), cur = eq.spot + eq.fut;
+  if (isFinite(cur)) pts.push({ t: now(), v: cur });
+  return { init, pts: pts.filter((p) => isFinite(p.t) && isFinite(p.v)).sort((a, b) => a.t - b.t), eq };
+}
+function recordEq() {     // 내 계좌 하루 한 줄 (그날 안에서는 마지막 값으로 덮어씀, 날이 바뀔 때만 저장소에 저장)
+  if (!caughtUp) return;
+  const px = prices();
+  for (const s of Object.keys(ME.spot.hold)) if (!(px.spot[s] > 0)) return;
+  for (const s of Object.keys(ME.fut.pos)) if (!(px.fut[s] > 0)) return;
+  const eq = E.equity(ME, px), day = new Date(now() + 9 * 3600e3).toISOString().slice(0, 10);
+  const row = { day, t: now(), spot: Math.round(eq.spot * 100) / 100, fut: Math.round(eq.fut * 100) / 100 };
+  const H = ME.eqHist ||= [], L = H[H.length - 1];
+  if (L && L.day === day) { Object.assign(L, row); LS.set('desk.me', ME); } else { H.push(row); save(); }
+}
+let perfChart = null;
+async function pagePerf(el) {
+  if (perfChart) { perfChart.remove(); perfChart = null; }
+  const px = prices(), me = acctSeries(ME, ME.eqHist, px), cl = CL ? acctSeries(CL, CL.equityHist, px) : null;
+  const sm = E.stats(ME).all, sc = CL ? E.stats(CL).all : null;
+  const ret = (a) => a ? a.pts[a.pts.length - 1].v / a.init - 1 : null;
+  const NAME = { A: 'TSB7 1/6 (현행)', B: 'TSB7 1/5 + 상한 80%', C: 'TSB7 1/4', D: 'TSB7 + BB20', H: 'BTC 보유', F: 'BTC 50일선 필터' };
+  const rows = [
+    { k: 'me', name: '나', sub: '재량 · 바이낸스 USDT', r: ret(me), spot: me ? me.eq.spot / (ME.init.spot ?? 1e4) - 1 : null, fut: me ? me.eq.fut / ME.init.usdt - 1 : null, dd: me ? mdd(me.pts.map((p) => p.v)) : null, n: sm.n, win: sm.win, R: sm.expR, since: ME.created, pts: me?.pts, base: me?.init, color: cssv('--accent') },
+    { k: 'cl', name: 'Claude', sub: '재량 · 하루 2번 판단', r: ret(cl), spot: cl ? cl.eq.spot / CL.init.spot - 1 : null, fut: cl ? cl.eq.fut / CL.init.usdt - 1 : null, dd: cl ? mdd(cl.pts.map((p) => p.v)) : null, n: sc?.n, win: sc?.win, R: sc?.expR, since: CL?.created, pts: cl?.pts, base: cl?.init, color: '#7c6bd6' },
+  ];
+  const BC = { A: cssv('--ok'), B: '#2a9d8f', H: cssv('--mute') };
+  for (const b of (BOT?.rows || []).filter((r) => ['A', 'B', 'C', 'D', 'H'].includes(r.a))) {
+    const v = b.pts.map((p) => p.v), base = 1e7;
+    rows.push({ k: b.a, name: `봇 ${b.a}`, sub: NAME[b.a], r: +b.last.ret, spot: null, fut: null, dd: mdd([base, ...v]), n: b.n, win: b.win, R: null, since: b.pts[0]?.t, pts: [{ t: b.pts[0]?.t, v: base }, ...b.pts], base, color: BC[b.a] || null });
+  }
+  const tp = (v) => v == null || !isFinite(v) ? '–' : Math.round(v * 100) + '%';
+  const prog = Math.min(100, sm.n);
+  el.innerHTML = `<div class="pg"><h2 class="pt">내 재량 연습 <small>셋업 하나로 100회 → 셋업별 기대값으로 판정</small></h2>
+      <div class="tiles"><div class="tile"><small>끝난 거래</small><b class="num">${sm.n} <em>/ 100</em></b><div class="prog" style="margin-top:6px"><i style="width:${prog}%"></i></div></div>
+      <div class="tile"><small>승률</small><b class="num">${tp(sm.win)}</b><em>손익비 ${sm.payoff ? sm.payoff.toFixed(2) : '–'}</em></div>
+      <div class="tile"><small>거래당 기대값</small><b class="num ${cls(sm.expR)}">${sm.expR != null ? sm.expR.toFixed(2) + 'R' : '–'}</b><em>${fsign(sm.exp)} USDT</em></div>
+      <div class="tile"><small>규칙 준수</small><b class="num">${tp(sm.rule)}</b><em>돌아보기를 남긴 거래 기준</em></div></div></div>
+    <div class="pg"><h2 class="pt">세 계좌 비교 <small>시작일이 달라 같은 기간 비교는 아니에요 · 봇은 업비트 원화</small></h2>
+      <div class="tbody" style="padding:0"><table class="t cmp"><thead><tr><th class="l">계좌</th><th>수익률</th><th>현물</th><th>선물</th><th>최대 낙폭</th><th>끝난 거래</th><th>승률</th><th>평균 R</th><th class="l">시작</th></tr></thead><tbody>
+      ${rows.map((r) => `<tr><td class="l">${r.color ? `<i style="display:inline-block;width:10px;height:3px;background:${r.color};vertical-align:middle;margin-right:6px"></i>` : ''}<b>${r.name}</b> <span class="mute">${esc(r.sub)}</span></td><td class="num"><b>${pc1(r.r)}</b></td><td class="num">${pc1(r.spot)}</td><td class="num">${pc1(r.fut)}</td><td class="num">${pc1(r.dd)}</td><td class="num">${r.n ?? '–'}</td><td class="num">${tp(r.win)}</td><td class="num">${r.R != null ? r.R.toFixed(2) : '–'}</td><td class="l num mute">${r.since ? ftime(r.since).slice(0, 5) : '–'}</td></tr>`).join('')}
+      </tbody></table></div>
+      <div id="perfChart"></div><div class="legend" id="perfLeg"></div></div>
+    <div class="pg"><h2 class="pt">주간 매매 평가 <small>매주 일요일 20:40, Claude 가 내 일지를 읽고 코칭</small></h2><div id="revBox"></div></div>`;
+  // 수익률 곡선
+  if (LC) {
+    const box = $('#perfChart');
+    perfChart = LC.createChart(box, { autoSize: true, layout: { background: { type: 'solid', color: cssv('--panel') }, textColor: cssv('--mute'), fontFamily: cssv('--num'), fontSize: 11 },
+      grid: { vertLines: { visible: false }, horzLines: { color: cssv('--line') } }, rightPriceScale: { borderColor: cssv('--line') }, timeScale: { borderColor: cssv('--line'), timeVisible: true }, localization: { locale: 'ko-KR', priceFormatter: (v) => (v > 0 ? '+' : '') + v.toFixed(1) + '%' } });
+    const leg = [];
+    for (const r of rows.filter((x) => x.color && x.pts && x.pts.length >= 2)) {
+      const ser = perfChart.addSeries(LC.LineSeries, { color: r.color, lineWidth: r.k === 'me' || r.k === 'cl' ? 2 : 1, priceLineVisible: false, lastValueVisible: true });
+      const m = new Map(); for (const p of r.pts) if (p.t) m.set(Math.floor(p.t / 1000) + KSTS, (p.v / r.base - 1) * 100);
+      ser.setData([...m.entries()].sort((a, b) => a[0] - b[0]).map(([time, value]) => ({ time, value })));
+      leg.push(`<span><i style="background:${r.color}"></i>${r.name}${r.k.length === 1 ? ' ' + esc(r.sub) : ''}</span>`);
+    }
+    perfChart.timeScale().fitContent();
+    $('#perfLeg').innerHTML = leg.join('') + '<span>세로축 = 시작 대비 수익률 (%)</span>';
+  }
+  // 주간 평가
+  const rb = $('#revBox');
+  if (!ghOn()) { rb.innerHTML = '<div class="empty">GitHub 를 연결하면 보여요.</div>'; return; }
+  const list = REVIEWS.slice().sort((a, b) => b.t - a.t);
+  if (!list.length) { rb.innerHTML = '<div class="empty">첫 평가는 이번 일요일 20:40에 올라와요. 거래할 때 셋업·감정·이유를 남겨 두면 평가가 구체적이 돼요.</div>'; return; }
+  if (!ui.rev || !list.some((x) => x.id === ui.rev)) ui.rev = list[0].id;
+  rb.innerHTML = `<div class="mk"><div class="blist2" id="rlist">${list.map((x) => `<button data-r="${esc(x.id)}" class="${x.id === ui.rev ? 'on' : ''}"><div class="when"><span class="tag sm">주간</span>${ftime(x.t)}${x.summary?.grade ? `<span class="tag sm acc">${esc(x.summary.grade)}</span>` : ''}</div><div class="hl">${esc(x.summary?.headline || x.title)}</div></button>`).join('')}</div><div id="rview" style="min-width:0;max-width:820px"></div></div>`;
+  $$('#rlist [data-r]').forEach((b) => b.onclick = () => { ui.rev = b.dataset.r; pagePerf(el); });
+  const e = list.find((x) => x.id === ui.rev);
+  if (REV_TXT[e.id] == null) REV_TXT[e.id] = await ghText(e.path).catch(() => null);
+  if ($('#rview')) $('#rview').innerHTML = REV_TXT[e.id] == null ? '<div class="empty">불러오지 못했어요</div>' : docHtml(e, REV_TXT[e.id]);
+}
+
 // ───────────────────────────── 시작
 function applyTheme() { if (cfg.theme === 'system') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = cfg.theme; }
 function renderAll() {
@@ -875,10 +1151,12 @@ function bind() {
     const tr = e.target.closest('[data-obpx]'); if (!tr || readOnly()) return;
     e.preventDefault(); setPriceField(+tr.dataset.obpx);
   });
+  $$('#pnav button').forEach((b) => b.onclick = () => { const p = b.dataset.page; if (p === ui.page) return; history.pushState(null, '', p === 'trade' ? location.pathname + location.search : '#' + p); setPage(p); });
+  window.addEventListener('popstate', () => setPage(location.hash.slice(1) || 'trade'));
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && caughtUp) { caughtUp = false; catchUpAll(); } });
 }
 async function start() {
-  applyTheme(); bind(); renderAll(); mountChart();
+  applyTheme(); bind(); renderAll(); mountChart(); setPage(location.hash.slice(1) || 'trade');
   setSync(ghOn() ? 'wait' : '', ghOn() ? '저장소 확인 중' : '이 기기에만 저장 (설정에서 GitHub 연결)');
   spotWS(); binanceWS();
   pollFut(); pollFutTicker(); setInterval(pollFut, 2000); setInterval(pollFutTicker, 20000); setInterval(pollSpot, 3000);
@@ -887,6 +1165,6 @@ async function start() {
   renderAll();
   await catchUpAll();
   loadShared(); loadBtcFilter();
-  setInterval(loadShared, 5 * 60000); setInterval(loadBtcFilter, 30 * 60000);
+  setInterval(loadShared, 5 * 60000); setInterval(loadBtcFilter, 30 * 60000); setInterval(recordEq, 60000); setTimeout(recordEq, 5000);
 }
 start();
