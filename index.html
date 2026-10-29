@@ -161,7 +161,7 @@ canvas{max-width:100%}
 .blist2{display:flex;flex-direction:column;gap:4px;max-height:75vh;overflow:auto}
 .blist2 button{display:block;width:100%;text-align:left;border:1px solid transparent;background:none;padding:8px 10px;border-radius:8px;cursor:pointer;color:var(--fg)}
 .blist2 button:hover{background:var(--panel2)}.blist2 button.on{background:var(--panel2);border-color:var(--line)}
-.blist2 .when{font-size:12px;color:var(--mute);display:flex;gap:6px;align-items:center}.blist2 .hl{font-size:13px;line-height:1.4;margin-top:2px}
+.blist2 .when{font-size:12px;color:var(--mute);display:flex;gap:6px;align-items:center;flex-wrap:wrap}.blist2 .when .tag{margin:0}.blist2 .tag.kind{font-size:12px;font-weight:600;padding:1px 10px;border:1px solid var(--line)}.blist2 .tag.k-morning{background:var(--accbg);color:var(--accent);border-color:transparent}.blist2 .hm{font-size:11px;color:var(--mute);opacity:.75;white-space:nowrap;font-variant-numeric:tabular-nums}.blist2 .hl{font-size:13px;line-height:1.4;margin-top:2px}
 .tag{display:inline-block;border-radius:12px;padding:1px 9px;font-size:12px;margin:2px 4px 2px 0;background:var(--panel2);color:var(--fg);white-space:nowrap}
 .tag.up{background:var(--upbg);color:var(--up)}.tag.dn{background:var(--dnbg);color:var(--dn)}.tag.acc{background:var(--accbg);color:var(--accent)}.tag.sm{font-size:11px;padding:0 7px}
 .hero{border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:14px 16px;display:flex;flex-direction:column;gap:10px;margin-bottom:6px}
@@ -249,7 +249,7 @@ details.sec{border-top:1px solid var(--line);padding:10px 2px}details.sec>summar
 <div class="toast" id="toast"></div>
 <div id="modalRoot"></div>
 <script src="vendor/lightweight-charts-5.1.0.js"></script><!-- 외부 CDN 대신 이 저장소에 둔 사본 (변조 위험 줄이기) · 트레이딩뷰 tv.js 는 그 보기를 고를 때만 불러옴 -->
-<script src="engine.js?v=202610252020"></script>
-<script src="app.js?v=202610252020"></script><!-- ?v= 는 배포할 때마다 바꿔서 브라우저가 예전 파일을 쓰지 않게 -->
+<script src="engine.js?v=202610292224"></script>
+<script src="app.js?v=202610292224"></script><!-- ?v= 는 배포할 때마다 바꿔서 브라우저가 예전 파일을 쓰지 않게 -->
 </body>
 </html>

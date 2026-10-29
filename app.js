@@ -1559,10 +1559,12 @@ function docHtml(e, txt) {
   const pre = doc.secs.find((x) => x.h === ''), secs = doc.secs.filter((x) => x.h && x.body && !/한눈에/.test(x.h));
   return heroHtml(e, doc) + (pre && pre.body ? `<div class="md note" style="margin:4px 2px 8px">${md(pre.body)}</div>` : '') + secs.map((x) => `<details class="sec" ${/출처/.test(x.h) ? '' : 'open'}><summary>${esc(x.h || '본문')}</summary><div class="md">${md(x.body)}</div></details>`).join('');
 }
+const fday = (t) => t ? ftime(t).slice(0, 5) : '';      // 10-29
+const fhm = (t) => t ? ftime(t).slice(6) : '';         // 21:32
 function listItem(e, on) {
-  if (e.id === 'num') return `<button data-b="num" class="${on ? 'on' : ''}"><div class="when"><span class="tag acc sm">표</span>${MKT ? ftime(MKT.t) : ''}</div><div class="hl">숫자 시황 자세히 — 메이저·등락·섹터·펀딩</div></button>`;
+  if (e.id === 'num') return `<button data-b="num" class="${on ? 'on' : ''}"><div class="when"><span class="tag acc kind">${MKT ? fday(MKT.t) + ' ' : ''}숫자 표</span><span class="hm">${MKT ? fhm(MKT.t) : ''}</span></div><div class="hl">숫자 시황 자세히 — 메이저·등락·섹터·펀딩</div></button>`;
   const S = e.summary || {};
-  return `<button data-b="${esc(e.id)}" class="${on ? 'on' : ''}"><div class="when"><span class="tag sm">${KIND[e.kind] || '글'}</span>${ftime(e.t)}${S.mood ? `<span class="tag sm ${moodCls(S.mood)}">${esc(S.mood)}</span>` : ''}${S.claude && S.claude !== '관망' ? `<span class="tag sm acc">Claude ${esc(S.claude)}</span>` : ''}</div><div class="hl">${esc(S.headline || e.title || '')}</div></button>`;
+  return `<button data-b="${esc(e.id)}" class="${on ? 'on' : ''}"><div class="when"><span class="tag kind k-${esc(e.kind || '')}">${fday(e.t)} ${KIND[e.kind] || '글'}</span><span class="hm">${fhm(e.t)}</span>${S.mood ? `<span class="tag sm ${moodCls(S.mood)}">${esc(S.mood)}</span>` : ''}${S.claude && S.claude !== '관망' ? `<span class="tag sm acc">Claude ${esc(S.claude)}</span>` : ''}</div><div class="hl">${esc(S.headline || e.title || '')}</div></button>`;
 }
 async function pageMkt(el) {
   if (!ghOn()) return needGH(el, '시황');
