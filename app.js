@@ -239,20 +239,36 @@ async function loadShared() {
   if (ui.page !== 'trade' && sig !== ui.sig) renderPage();       // 바뀐 게 있을 때만 다시 그림 (읽던 위치 유지)
   ui.sig = sig;
 }
+// 봇 계좌: A~D (TSB7 계열) · E·F (급락 매수, 제때 했다면 방식) · BH·BF (기준선). v5.1 전에는 기준선이 H·F 폴더 → 이름이 바뀌기 전 기록도 읽음
+const BOT_ORDER = ['A', 'B', 'C', 'D', 'E', 'F', 'BH', 'BF'];
+const BOT_NAME = { A: 'TSB7 1/6 (현행)', B: 'TSB7 1/5 + 노출 상한 80%', C: 'TSB7 1/4', D: 'TSB7 + BB20 1/8', E: '급락 매수 1/8 (단독)', F: 'TSB7 + 급락 매수 1/16', BH: 'BTC 보유', BF: 'BTC 50일선 필터' };
+const BOT_BENCH = new Set(['BH', 'BF']), BOT_DIP = new Set(['E', 'F']);
 async function loadBot() {
-  const accts = ['A', 'B', 'C', 'D', 'H', 'F'], out = { rows: [], rec: [] };
-  const parse = (txt) => { const L = txt.replace(/^﻿/, '').trim().split(/\r?\n/); const h = L[0].split(','); return L.slice(1).map((l) => { const v = l.split(','); return Object.fromEntries(h.map((k, i) => [k, v[i]])); }); };
-  for (const a of accts) {
-    const t = await ghText(`paper/${a}/equity.csv`).catch(() => null);
+  const out = { rows: [], rec: [] };
+  const parse = (txt) => { const L = txt.replace(/^\uFEFF/, '').trim().split(/\r?\n/); const h = L[0].split(','); return L.slice(1).map((l) => { const v = l.split(','); return Object.fromEntries(h.map((k, i) => [k, v[i]])); }); };
+  const get = (p) => ghText(p).catch(() => null);
+  const eqs = {};
+  for (const a of BOT_ORDER) eqs[a] = { dir: a, t: await get(`paper/${a}/equity.csv`) };
+  const legacy = !eqs.BH.t && !eqs.BF.t;                     // 기준선 이름이 아직 안 바뀐 기록 (봇이 v5.1 로 한 번 돌기 전)
+  if (legacy) {
+    eqs.BH = { dir: 'H', t: await get('paper/H/equity.csv') };
+    eqs.BF = { dir: 'F', t: eqs.F.t };                         // 그때의 F = BTC 50일선 필터
+    eqs.F = { dir: 'F', t: null };
+  }
+  for (const a of BOT_ORDER) {
+    const { dir, t } = eqs[a];
     if (!t) continue;
     const rows = parse(t); const last = rows[rows.length - 1];
     const tt = (r) => Date.parse(String(r.time_utc || '').replace(' ', 'T').replace(/(\.\d{3})\d+/, '$1'));
-    const tr = await ghText(`paper/${a}/trades.csv`).catch(() => null), sells = tr ? parse(tr).filter((x) => x.side === '매도') : [];
+    const tr = await get(`paper/${dir}/trades.csv`), sells = tr ? parse(tr).filter((x) => x.side === '매도') : [];
     out.rows.push({ a, last, hist: rows.map((r) => +r.equity).filter(isFinite), pts: rows.map((r) => ({ t: tt(r), v: +r.equity })).filter((x) => isFinite(x.t) && isFinite(x.v)),
       n: sells.length, win: sells.length ? sells.filter((x) => +x.pnl > 0).length / sells.length : null });
   }
-  const rec = await ghText('paper/reconcile.csv').catch(() => null);
-  if (rec) { const rr = parse(rec); const lastT = rr.length ? rr[rr.length - 1].time_kst : null; out.rec = rr.filter((r) => r.time_kst === lastT); }
+  const rec = await get('paper/reconcile.csv');
+  if (rec) {
+    const rr = parse(rec).map((r) => ({ ...r, acct: legacy ? ({ H: 'BH', F: 'BF' }[r.acct] || r.acct) : r.acct }));
+    const lastT = rr.length ? rr[rr.length - 1].time_kst : null; out.rec = rr.filter((r) => r.time_kst === lastT);
+  }
   return out;
 }
 
@@ -1374,14 +1390,16 @@ function md(t) {
 function tabBot(body) {
   if (!ghOn()) { body.innerHTML = '<div class="empty">가상매매 봇(tsb7-paper) 기록을 읽으려면 설정에서 GitHub 를 연결해 주세요.</div>'; return; }
   if (!BOT || !BOT.rows.length) { body.innerHTML = '<div class="empty">봇 기록을 찾지 못했어요 (paper/*/equity.csv).</div>'; return; }
-  const NAME = { A: 'TSB7 1/6 (현행)', B: 'TSB7 1/5 + 노출 상한 80%', C: 'TSB7 1/4', D: 'TSB7 + BB20 1/8', H: 'BTC 보유', F: 'BTC 50일선 필터' };
   const rec = Object.fromEntries((BOT.rec || []).map((r) => [r.acct, r]));
+  const mark = (a) => BOT_BENCH.has(a) ? '<span class="tag sm" title="비교용 기준선">기준</span>' : BOT_DIP.has(a) ? '<span class="tag sm acc" title="급락 매수 · 제때 했다면 방식">급락</span>' : '';
   body.innerHTML = `<table class="t"><thead><tr><th class="l">계좌</th><th>평가액 (원)</th><th>수익률</th><th>제때 실행했다면</th><th>놓친 거래</th><th>보유</th><th class="l">BTC 필터</th><th class="l">갱신</th><th>추이</th></tr></thead><tbody>${BOT.rows.map((r) => {
-    const x = r.last, c = rec[r.a];
-    return `<tr><td class="l"><b>${r.a}</b> <span class="mute">${NAME[r.a] || ''}</span></td><td class="num">${fkrw(+x.equity)}</td><td class="num ${cls(+x.ret)}">${fpct(+x.ret)}</td>
-      <td class="num ${c ? cls(+c.ontime_ret) : ''}">${c ? fpct(+c.ontime_ret) : '–'}</td><td class="num">${c ? c.ontime_only : '–'}</td><td class="l">${esc(x.holdings || '–')}</td>
+    const x = r.last, c = rec[r.a], dip = BOT_DIP.has(r.a);
+    return `<tr${BOT_BENCH.has(r.a) ? ' class="mute"' : ''}><td class="l"><b>${r.a}</b> ${mark(r.a)}<span class="mute">${BOT_NAME[r.a] || ''}</span></td><td class="num">${fkrw(+x.equity)}</td><td class="num ${cls(+x.ret)}">${fpct(+x.ret)}</td>
+      <td class="num ${c ? cls(+c.ontime_ret) : ''}">${dip ? '<span class="mute" title="처음부터 제때 했다면 방식으로 계산">= 같음</span>' : c ? fpct(+c.ontime_ret) : '–'}</td><td class="num">${dip ? '–' : c ? c.ontime_only : '–'}</td><td class="l">${esc(x.holdings || '–')}</td>
       <td class="l">${x.btc_filter_4h === 'True' ? '<span class="up">켜짐</span>' : '<span class="dn">꺼짐</span>'}</td><td class="l num">${esc(x.time_kst)}</td><td>${spark(r.hist)}</td></tr>`;
-  }).join('')}</tbody></table><p class="note">'제때 실행했다면' = 하루 한 번 대조 실행이 놓친 매수·늦은 매도를 다음 봉 시가로 반영한 값.</p>`;
+  }).join('')}</tbody></table><p class="note">'제때 실행했다면' = 하루 한 번 대조 실행이 놓친 매수·늦은 매도를 다음 봉 시가로 반영한 값.
+    <span class="tag sm acc">급락</span> E·F 는 1시간 −2% 급락 중 BTC·코인 50일선 위 · 공포탐욕 ≥ 50 · 펀딩 3일 ≥ 0.01% 인 것만 −1% 지정가(12시간) → 24시간 보유. 4시간마다 확인할 때 직전 1시간봉·5분봉으로 그 시각에 했던 것처럼 계산 (처음부터 제때 방식). F 의 TSB7 은 A 와 같은 규칙.
+    <span class="tag sm">기준</span> BH·BF 는 비교용 기준선 (예전 H·F).</p>`;
 }
 function spark(v) {
   if (!v || v.length < 2) return '';
@@ -1617,15 +1635,15 @@ async function pagePerf(el) {
   const px = prices(), me = acctSeries(ME, ME.eqHist, px), cl = CL ? acctSeries(CL, CL.equityHist, px) : null;
   const sm = E.stats(ME).all, sc = CL ? E.stats(CL).all : null;
   const ret = (a) => a ? a.pts[a.pts.length - 1].v / a.init - 1 : null;
-  const NAME = { A: 'TSB7 1/6 (현행)', B: 'TSB7 1/5 + 상한 80%', C: 'TSB7 1/4', D: 'TSB7 + BB20', H: 'BTC 보유', F: 'BTC 50일선 필터' };
+  const NAME = BOT_NAME;
   const rows = [
     { k: 'me', name: '나', sub: '재량 · 바이낸스 USDT' + ((ME.resets || []).length ? ` · 자금 리셋 ${ME.resets.length}회 (+${fmoney(ME.resets.reduce((a, r) => a + r.add, 0))})` : ''), r: ret(me), spot: me ? (me.eq.spot - E.deposited(ME, 'spot')) / (ME.init.spot ?? 1e4) : null, fut: me ? (me.eq.fut - E.deposited(ME, 'fut')) / ME.init.usdt : null, dd: me ? mdd(ddPts(me.pts)) : null, n: sm.n, win: sm.win, R: sm.expR, since: ME.created, pts: me?.pts, base: me?.init, color: cssv('--accent') },
     { k: 'cl', name: 'Claude', sub: '재량 · 하루 2번 판단', r: ret(cl), spot: cl ? (cl.eq.spot - E.deposited(CL, 'spot')) / CL.init.spot : null, fut: cl ? (cl.eq.fut - E.deposited(CL, 'fut')) / CL.init.usdt : null, dd: cl ? mdd(ddPts(cl.pts)) : null, n: sc?.n, win: sc?.win, R: sc?.expR, since: CL?.created, pts: cl?.pts, base: cl?.init, color: '#7c6bd6' },
   ];
-  const BC = { A: cssv('--ok'), B: '#2a9d8f', H: cssv('--mute') };
-  for (const b of (BOT?.rows || []).filter((r) => ['A', 'B', 'C', 'D', 'H'].includes(r.a))) {
+  const BC = { A: cssv('--ok'), B: '#2a9d8f', E: '#b0476f', F: '#c77d1a', BH: cssv('--mute') };
+  for (const b of (BOT?.rows || []).filter((r) => ['A', 'B', 'C', 'D', 'E', 'F', 'BH'].includes(r.a))) {
     const v = b.pts.map((p) => p.v), base = 1e7;
-    rows.push({ k: b.a, name: `봇 ${b.a}`, sub: NAME[b.a], r: +b.last.ret, spot: null, fut: null, dd: mdd([base, ...v]), n: b.n, win: b.win, R: null, since: b.pts[0]?.t, pts: [{ t: b.pts[0]?.t, v: base }, ...b.pts], base, color: BC[b.a] || null });
+    rows.push({ k: b.a, bot: true, name: BOT_BENCH.has(b.a) ? `기준 ${b.a}` : `봇 ${b.a}`, sub: NAME[b.a], r: +b.last.ret, spot: null, fut: null, dd: mdd([base, ...v]), n: b.n, win: b.win, R: null, since: b.pts[0]?.t, pts: [{ t: b.pts[0]?.t, v: base }, ...b.pts], base, color: BC[b.a] || null });
   }
   const tp = (v) => v == null || !isFinite(v) ? '–' : Math.round(v * 100) + '%';
   const prog = Math.min(100, sm.n);
@@ -1650,7 +1668,7 @@ async function pagePerf(el) {
       const ser = perfChart.addSeries(LC.LineSeries, { color: r.color, lineWidth: r.k === 'me' || r.k === 'cl' ? 2 : 1, priceLineVisible: false, lastValueVisible: true });
       const m = new Map(); for (const p of r.pts) if (p.t) m.set(Math.floor(p.t / 1000) + KSTS, (p.v / r.base - 1) * 100);
       ser.setData([...m.entries()].sort((a, b) => a[0] - b[0]).map(([time, value]) => ({ time, value })));
-      leg.push(`<span><i style="background:${r.color}"></i>${r.name}${r.k.length === 1 ? ' ' + esc(r.sub) : ''}</span>`);
+      leg.push(`<span><i style="background:${r.color}"></i>${r.name}${r.bot ? ' ' + esc(r.sub) : ''}</span>`);
     }
     perfChart.timeScale().fitContent();
     $('#perfLeg').innerHTML = leg.join('') + '<span>세로축 = 시작 대비 수익률 (%)</span>';

@@ -19,7 +19,7 @@
   - 통계 탭에서 셋업별·감정별 승률, 손익비, 거래당 기대값(USDT와 R)을 보여 줍니다.
   - 100회 진행률도 함께 보여 줍니다.
 - **Claude 계좌·브리핑:** 매일 09:20(아침, 진입 판단)·21:20(저녁, 관리만) 예약 실행되는 Claude 가 `desk/BRIEFING.md` 지침대로 브리핑을 쓰고 `desk/claude/orders.json` 에 주문을 넣습니다. 가상매매 봇(GitHub Actions)이 4시간마다 15분봉으로 체결을 계산하고 숫자 시황(`desk/market.json`)을 만듭니다. 매주 일요일 20:40 에는 `desk/REVIEW.md` 지침대로 내 매매 일지 평가가 `desk/reviews/` 에 올라옵니다.
-- **봇 계좌:** `paper/*/equity.csv`와 일일 대조(`paper/reconcile.csv`)를 보여 줍니다.
+- **봇 계좌:** `paper/*/equity.csv`와 일일 대조(`paper/reconcile.csv`)를 보여 줍니다. A~D (TSB7 계열), E·F (급락 매수 — '급락' 표시, 제때 했다면 방식), BH·BF (기준선 — '기준' 표시, 예전 H·F). 성과 탭 비교에도 E·F 포함.
 - **스크리너:** 업비트 원화 종목 중 그날 09시부터 크게 움직일(위든 아래든) 종목 10개를 전날 21시·새벽 6시에 미리 고르고, 정오(±10%)·다음날 9시(±20%)에 실제로 움직였는지 자동 채점해 누적 적중률을 보여 줍니다.
   - 만드는 곳: `tsb7-paper`의 `desk/screener.py` + `.github/workflows/screener.yml` (21:06·06:06 목록, 12:08·09:38 채점, 30분 뒤 예비 실행)
   - 모델: `desk/screener/model.json` = 연구 코드 `vol_lab.py export-model` 결과 (업비트 1시간봉 재료 19개 · 로지스틱). 파일이 없으면 '20일 변동성 순'으로 임시 운영합니다.
