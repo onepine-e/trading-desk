@@ -36,6 +36,10 @@ function migrateMe(m) {
 let ME = migrateMe(LS.get('desk.me', null));
 let ME_SHA = LS.get('desk.me.sha', null);
 let CL = null, BRIEFS = [], BRIEF_TXT = {}, BOT = null, MKT = null, REVIEWS = [], REV_TXT = {}, SCR = null, SCR_DAY = {};
+// 저장소 기록(봇·시황·Claude·스크리너)은 지난번 읽은 것을 이 기기에 남겨 두고 먼저 보여줌 → 새로 읽으면 바꿔 그림
+let SHARED = { live: false, t: 0 };
+(() => { const c = LS.get('desk.shared', null); if (!c || c.v !== 1) return;
+  ({ CL = null, BRIEFS = [], BOT = null, MKT = null, REVIEWS = [], SCR = null } = c); SHARED.t = c.t || 0; })();
 const ui = { acct: 'me', mkt: 'spot', sym: 'BTC', tab: 'pos', side: 'buy', otype: 'market', lev: 10, statMkt: 'fut', brief: null, page: 'trade', rev: null, draw: null, drawA: null };
 const P = { spot: {}, fut: {} };
 for (const s of SYMS) { P.spot[s] = {}; P.fut[s] = {}; }
@@ -227,15 +231,22 @@ async function pullRemote(quiet) {
 window.addEventListener('online', () => { if (dirty) pushRemote(); else pullRemote(true); });
 async function loadShared() {
   if (!ghOn()) return;
-  try { CL = (await ghJSON('desk/claude/state.json')).data; } catch { /* 아직 없음 */ }
-  try { BRIEFS = (await ghJSON('desk/briefings/index.json')).data || []; } catch { BRIEFS = []; }
-  try { MKT = (await ghJSON('desk/market.json')).data; } catch { MKT = null; }
-  try { REVIEWS = (await ghJSON('desk/reviews/index.json')).data || []; } catch { REVIEWS = []; }
-  try { BOT = await loadBot(); } catch { BOT = null; }
-  try { const x = (await ghJSON('desk/screener/index.json')).data; if (x?.updated !== SCR?.updated) SCR_DAY = {}; SCR = x; } catch { /* 아직 없음 */ }
+  const keep = Symbol('keep');                                 // 읽기 실패(404 아님) → 이전 값 유지
+  const j = (p) => ghJSON(p).then((x) => x.data).catch(() => keep);
+  const [cl, br, mk, rv, bot, scr] = await Promise.all([      // 한 번에 같이 요청 (예전엔 하나씩 차례로 → 20번 넘게 기다림)
+    j('desk/claude/state.json'), j('desk/briefings/index.json'), j('desk/market.json'), j('desk/reviews/index.json'),
+    loadBot().catch(() => keep), j('desk/screener/index.json')]);
+  if (cl !== keep) CL = cl;
+  if (br !== keep) BRIEFS = br || [];
+  if (mk !== keep) MKT = mk;
+  if (rv !== keep) REVIEWS = rv || [];
+  if (bot !== keep) BOT = bot;
+  if (scr !== keep && scr) { if (scr.updated !== SCR?.updated) SCR_DAY = {}; SCR = scr; }
+  SHARED = { live: true, t: now() };
+  LS.set('desk.shared', { v: 1, t: SHARED.t, CL, BRIEFS, BOT, MKT, REVIEWS, SCR });
   renderTabs(); renderTop(); if (readOnly()) renderForm();
   renderNav();
-  const sig = [MKT?.t, BRIEFS.length, REVIEWS.length, CL?.updated, BOT?.rows.map((r) => r.last.time_kst).join(), SCR?.updated].join('|');
+  const sig = [MKT?.t, BRIEFS.length, REVIEWS.length, CL?.updated, BOT?.rows.map((r) => r.last.time_kst).join(), SCR?.updated, SHARED.live].join('|');
   if (ui.page !== 'trade' && sig !== ui.sig) renderPage();       // 바뀐 게 있을 때만 다시 그림 (읽던 위치 유지)
   ui.sig = sig;
 }
@@ -243,28 +254,39 @@ async function loadShared() {
 const BOT_ORDER = ['A', 'B', 'C', 'D', 'E', 'F', 'BH', 'BF'];
 const BOT_NAME = { A: 'TSB7 1/6 (현행)', B: 'TSB7 1/5 + 노출 상한 80%', C: 'TSB7 1/4', D: 'TSB7 + BB20 1/8', E: '급락 매수 1/8 (단독)', F: 'TSB7 + 급락 매수 1/16', BH: 'BTC 보유', BF: 'BTC 50일선 필터' };
 const BOT_BENCH = new Set(['BH', 'BF']), BOT_DIP = new Set(['E', 'F']);
+// 계좌마다 바탕 전략을 타원 표시로 (시황 목록의 '10-30 아침' 처럼) + 나머지 설명
+const BOT_MODEL = { A: ['tsb7'], B: ['tsb7'], C: ['tsb7'], D: ['tsb7', 'bb'], E: ['dip'], F: ['tsb7', 'dip'], BH: ['bench'], BF: ['bench'] };
+const BOT_SHORT = { A: '1/6 (현행)', B: '1/5 · 노출 상한 80%', C: '1/4', D: '각 1/8', E: '1/8 단독', F: 'TSB7 1/6 · 급락 1/16', BH: 'BTC 보유', BF: 'BTC 50일선 필터' };
+const MODEL_TAG = { tsb7: ['TSB7', 'TSB7 추세 (4시간봉)'], dip: ['급락', '급락 매수 · 제때 했다면 방식'], bb: ['BB20', '볼린저 20 추가 전략'], bench: ['기준', '비교용 기준선'] };
+const botTags = (a) => (BOT_MODEL[a] || []).map((m) => `<span class="tag mdl m-${m}" title="${MODEL_TAG[m][1]}">${MODEL_TAG[m][0]}</span>`).join('');
+const botLabel = (a) => `<span class="bl">${botTags(a)}<span class="mute">${esc(BOT_SHORT[a] || '')}</span></span>`;
 async function loadBot() {
-  const out = { rows: [], rec: [] };
+  const out = { rows: [], rec: [], missing: [] };
   const parse = (txt) => { const L = txt.replace(/^\uFEFF/, '').trim().split(/\r?\n/); const h = L[0].split(','); return L.slice(1).map((l) => { const v = l.split(','); return Object.fromEntries(h.map((k, i) => [k, v[i]])); }); };
-  const get = (p) => ghText(p).catch(() => null);
+  // 필요한 파일을 한꺼번에 요청 (없는 파일 = 404 → null). 404 가 아닌 실패가 있으면 통째로 실패 처리 → 이전 기록 유지
+  const files = [...BOT_ORDER.flatMap((a) => [`paper/${a}/equity.csv`, `paper/${a}/trades.csv`]), 'paper/H/equity.csv', 'paper/H/trades.csv', 'paper/reconcile.csv'];
+  let err = null;
+  const got = await Promise.all(files.map((p) => ghText(p).catch((e) => { err = e; return null; })));
+  if (err) throw err;
+  const T = Object.fromEntries(files.map((p, i) => [p, got[i]]));
   const eqs = {};
-  for (const a of BOT_ORDER) eqs[a] = { dir: a, t: await get(`paper/${a}/equity.csv`) };
+  for (const a of BOT_ORDER) eqs[a] = { dir: a, t: T[`paper/${a}/equity.csv`] };
   const legacy = !eqs.BH.t && !eqs.BF.t;                     // 기준선 이름이 아직 안 바뀐 기록 (봇이 v5.1 로 한 번 돌기 전)
   if (legacy) {
-    eqs.BH = { dir: 'H', t: await get('paper/H/equity.csv') };
+    eqs.BH = { dir: 'H', t: T['paper/H/equity.csv'] };
     eqs.BF = { dir: 'F', t: eqs.F.t };                         // 그때의 F = BTC 50일선 필터
     eqs.F = { dir: 'F', t: null };
   }
+  const tt = (r) => Date.parse(String(r.time_utc || '').replace(' ', 'T').replace(/(\.\d{3})\d+/, '$1'));
   for (const a of BOT_ORDER) {
     const { dir, t } = eqs[a];
-    if (!t) continue;
+    if (!t) { out.missing.push(a); continue; }
     const rows = parse(t); const last = rows[rows.length - 1];
-    const tt = (r) => Date.parse(String(r.time_utc || '').replace(' ', 'T').replace(/(\.\d{3})\d+/, '$1'));
-    const tr = await get(`paper/${dir}/trades.csv`), sells = tr ? parse(tr).filter((x) => x.side === '매도') : [];
+    const tr = T[`paper/${dir}/trades.csv`], sells = tr ? parse(tr).filter((x) => x.side === '매도') : [];
     out.rows.push({ a, last, hist: rows.map((r) => +r.equity).filter(isFinite), pts: rows.map((r) => ({ t: tt(r), v: +r.equity })).filter((x) => isFinite(x.t) && isFinite(x.v)),
       n: sells.length, win: sells.length ? sells.filter((x) => +x.pnl > 0).length / sells.length : null });
   }
-  const rec = await get('paper/reconcile.csv');
+  const rec = T['paper/reconcile.csv'];
   if (rec) {
     const rr = parse(rec).map((r) => ({ ...r, acct: legacy ? ({ H: 'BH', F: 'BF' }[r.acct] || r.acct) : r.acct }));
     const lastT = rr.length ? rr[rr.length - 1].time_kst : null; out.rec = rr.filter((r) => r.time_kst === lastT);
@@ -1389,17 +1411,17 @@ function md(t) {
 }
 function tabBot(body) {
   if (!ghOn()) { body.innerHTML = '<div class="empty">가상매매 봇(tsb7-paper) 기록을 읽으려면 설정에서 GitHub 를 연결해 주세요.</div>'; return; }
-  if (!BOT || !BOT.rows.length) { body.innerHTML = '<div class="empty">봇 기록을 찾지 못했어요 (paper/*/equity.csv).</div>'; return; }
+  if (!BOT) { body.innerHTML = `<div class="empty">${SHARED.live ? '봇 기록을 읽지 못했어요 — 5분 뒤 다시 시도해요.' : '봇 기록 불러오는 중…'}</div>`; return; }
+  if (!BOT.rows.length) { body.innerHTML = '<div class="empty">봇 기록을 찾지 못했어요 (paper/*/equity.csv).</div>'; return; }
   const rec = Object.fromEntries((BOT.rec || []).map((r) => [r.acct, r]));
-  const mark = (a) => BOT_BENCH.has(a) ? '<span class="tag sm" title="비교용 기준선">기준</span>' : BOT_DIP.has(a) ? '<span class="tag sm acc" title="급락 매수 · 제때 했다면 방식">급락</span>' : '';
   body.innerHTML = `<table class="t"><thead><tr><th class="l">계좌</th><th>평가액 (원)</th><th>수익률</th><th>제때 실행했다면</th><th>놓친 거래</th><th>보유</th><th class="l">BTC 필터</th><th class="l">갱신</th><th>추이</th></tr></thead><tbody>${BOT.rows.map((r) => {
     const x = r.last, c = rec[r.a], dip = BOT_DIP.has(r.a);
-    return `<tr${BOT_BENCH.has(r.a) ? ' class="mute"' : ''}><td class="l"><b>${r.a}</b> ${mark(r.a)}<span class="mute">${BOT_NAME[r.a] || ''}</span></td><td class="num">${fkrw(+x.equity)}</td><td class="num ${cls(+x.ret)}">${fpct(+x.ret)}</td>
+    return `<tr${BOT_BENCH.has(r.a) ? ' class="mute"' : ''}><td class="l"><b class="ba">${r.a}</b>${botLabel(r.a)}</td><td class="num">${fkrw(+x.equity)}</td><td class="num ${cls(+x.ret)}">${fpct(+x.ret)}</td>
       <td class="num ${c ? cls(+c.ontime_ret) : ''}">${dip ? '<span class="mute" title="처음부터 제때 했다면 방식으로 계산">= 같음</span>' : c ? fpct(+c.ontime_ret) : '–'}</td><td class="num">${dip ? '–' : c ? c.ontime_only : '–'}</td><td class="l">${esc(x.holdings || '–')}</td>
       <td class="l">${x.btc_filter_4h === 'True' ? '<span class="up">켜짐</span>' : '<span class="dn">꺼짐</span>'}</td><td class="l num">${esc(x.time_kst)}</td><td>${spark(r.hist)}</td></tr>`;
-  }).join('')}</tbody></table><p class="note">'제때 실행했다면' = 하루 한 번 대조 실행이 놓친 매수·늦은 매도를 다음 봉 시가로 반영한 값.
-    <span class="tag sm acc">급락</span> E·F 는 1시간 −2% 급락 중 BTC·코인 50일선 위 · 공포탐욕 ≥ 50 · 펀딩 3일 ≥ 0.01% 인 것만 −1% 지정가(12시간) → 24시간 보유. 4시간마다 확인할 때 직전 1시간봉·5분봉으로 그 시각에 했던 것처럼 계산 (처음부터 제때 방식). F 의 TSB7 은 A 와 같은 규칙.
-    <span class="tag sm">기준</span> BH·BF 는 비교용 기준선 (예전 H·F).</p>`;
+  }).join('')}${(BOT.missing || []).filter((a) => !BOT_BENCH.has(a)).map((a) => `<tr class="mute"><td class="l"><b class="ba">${a}</b>${botLabel(a)}</td><td colspan="8" class="l">첫 실행 대기 — 다음 4시간 확인(01·05·09·13·17·21시 2분) 때 기록 시작</td></tr>`).join('')}</tbody></table><p class="note">'제때 실행했다면' = 하루 한 번 대조 실행이 놓친 매수·늦은 매도를 다음 봉 시가로 반영한 값.
+    <span class="tag mdl m-dip">급락</span> E·F 는 1시간 −2% 급락 중 BTC·코인 50일선 위 · 공포탐욕 ≥ 50 · 펀딩 3일 ≥ 0.01% 인 것만 −1% 지정가(12시간) → 24시간 보유. 4시간마다 확인할 때 직전 1시간봉·5분봉으로 그 시각에 했던 것처럼 계산 (처음부터 제때 방식). F 의 TSB7 은 A 와 같은 규칙.
+    <span class="tag mdl m-bench">기준</span> BH·BF 는 비교용 기준선 (예전 H·F).</p>`;
 }
 function spark(v) {
   if (!v || v.length < 2) return '';
@@ -1508,7 +1530,7 @@ function renderPage() {
   if (ui.page === 'mkt') pageMkt($('#pg-mkt'));
   else if (ui.page === 'perf') pagePerf($('#pg-perf'));
   else if (ui.page === 'scr') pageScr($('#pg-scr'));
-  else if (ui.page === 'bot') { const el = $('#pg-bot'); el.innerHTML = '<div class="pg"><h2 class="pt">TSB7 가상매매 봇 <small>업비트 원화 · 4시간봉 마감마다</small></h2><div class="tbody" style="padding:0" id="botBody"></div></div>'; tabBot($('#botBody')); }
+  else if (ui.page === 'bot') { const el = $('#pg-bot'); el.innerHTML = `<div class="pg"><h2 class="pt">가상매매 봇 <small>업비트 원화 · 4시간봉 마감마다${SHARED.live ? '' : SHARED.t ? ` · <span class="acc">${ftime(SHARED.t)} 에 읽은 기록 — 새로 읽는 중…</span>` : ''}</small></h2><div class="tbody" style="padding:0" id="botBody"></div></div>`; tabBot($('#botBody')); }
 }
 const needGH = (el, what) => { el.innerHTML = `<div class="pg"><div class="empty">${what}은(는) GitHub 저장소에서 읽어요. 오른쪽 위 ⚙ 설정에서 GitHub 를 연결해 주세요.</div></div>`; };
 const KIND = { morning: '아침', evening: '저녁', review: '주간' };
@@ -1643,7 +1665,7 @@ async function pagePerf(el) {
   const BC = { A: cssv('--ok'), B: '#2a9d8f', E: '#b0476f', F: '#c77d1a', BH: cssv('--mute') };
   for (const b of (BOT?.rows || []).filter((r) => ['A', 'B', 'C', 'D', 'E', 'F', 'BH'].includes(r.a))) {
     const v = b.pts.map((p) => p.v), base = 1e7;
-    rows.push({ k: b.a, bot: true, name: BOT_BENCH.has(b.a) ? `기준 ${b.a}` : `봇 ${b.a}`, sub: NAME[b.a], r: +b.last.ret, spot: null, fut: null, dd: mdd([base, ...v]), n: b.n, win: b.win, R: null, since: b.pts[0]?.t, pts: [{ t: b.pts[0]?.t, v: base }, ...b.pts], base, color: BC[b.a] || null });
+    rows.push({ k: b.a, bot: true, name: BOT_BENCH.has(b.a) ? `기준 ${b.a}` : `봇 ${b.a}`, sub: NAME[b.a], lab: botLabel(b.a), r: +b.last.ret, spot: null, fut: null, dd: mdd([base, ...v]), n: b.n, win: b.win, R: null, since: b.pts[0]?.t, pts: [{ t: b.pts[0]?.t, v: base }, ...b.pts], base, color: BC[b.a] || null });
   }
   const tp = (v) => v == null || !isFinite(v) ? '–' : Math.round(v * 100) + '%';
   const prog = Math.min(100, sm.n);
@@ -1654,7 +1676,7 @@ async function pagePerf(el) {
       <div class="tile"><small>규칙 준수</small><b class="num">${tp(sm.rule)}</b><em>돌아보기를 남긴 거래 기준</em></div></div></div>
     <div class="pg"><h2 class="pt">세 계좌 비교 <small>시작일이 달라 같은 기간 비교는 아니에요 · 봇은 업비트 원화 · 누적 손익률 = 총 손익 ÷ 처음 자금 (리셋 전 손실 포함 — 전액 손실 두 번이면 −200%) · 체결 조건도 달라요: Claude 선물은 근사 가격·펀딩 없음</small></h2>
       <div class="tbody" style="padding:0"><table class="t cmp"><thead><tr><th class="l">계좌</th><th title="총 손익 ÷ 처음 자금. 자금 리셋으로 채운 돈은 손익이 아님">누적 손익률</th><th>현물</th><th>선물</th><th title="일별 기록(그날 최저 포함) 기준">최대 낙폭</th><th>끝난 거래</th><th>승률</th><th>평균 R</th><th class="l">시작</th></tr></thead><tbody>
-      ${rows.map((r) => `<tr><td class="l">${r.color ? `<i style="display:inline-block;width:10px;height:3px;background:${r.color};vertical-align:middle;margin-right:6px"></i>` : ''}<b>${r.name}</b> <span class="mute">${esc(r.sub)}</span></td><td class="num"><b>${pc1(r.r)}</b></td><td class="num">${pc1(r.spot)}</td><td class="num">${pc1(r.fut)}</td><td class="num">${pc1(r.dd)}</td><td class="num">${r.n ?? '–'}</td><td class="num">${tp(r.win)}</td><td class="num">${r.R != null ? r.R.toFixed(2) : '–'}</td><td class="l num mute">${r.since ? ftime(r.since).slice(0, 5) : '–'}</td></tr>`).join('')}
+      ${rows.map((r) => `<tr><td class="l">${r.color ? `<i style="display:inline-block;width:10px;height:3px;background:${r.color};vertical-align:middle;margin-right:6px"></i>` : ''}<b>${r.name}</b> ${r.lab || `<span class="mute">${esc(r.sub)}</span>`}</td><td class="num"><b>${pc1(r.r)}</b></td><td class="num">${pc1(r.spot)}</td><td class="num">${pc1(r.fut)}</td><td class="num">${pc1(r.dd)}</td><td class="num">${r.n ?? '–'}</td><td class="num">${tp(r.win)}</td><td class="num">${r.R != null ? r.R.toFixed(2) : '–'}</td><td class="l num mute">${r.since ? ftime(r.since).slice(0, 5) : '–'}</td></tr>`).join('')}
       </tbody></table></div>
       <div id="perfChart"></div><div class="legend" id="perfLeg"></div></div>
     <div class="pg"><h2 class="pt">주간 매매 평가 <small>매주 일요일 20:40, Claude 가 내 일지를 읽고 코칭</small></h2><div id="revBox"></div></div>`;
@@ -1826,11 +1848,11 @@ async function start() {
   setSync(ghOn() ? 'wait' : '', ghOn() ? '저장소 확인 중' : '이 기기에만 저장 (⚙ 설정에서 GitHub 연결)');
   spotWS(); binanceWS();
   pollFut(); pollFutTicker(); setInterval(pollFut, 2000); setInterval(pollFutTicker, 20000); setInterval(pollSpot, 3000);
+  loadShared(); loadBtcFilter();                             // 봇·시황 기록은 기다리지 않고 바로 (아래 내 계좌 맞추기와 동시에)
   if (migratedNote) toast('현물 계좌를 바이낸스 USDT 기준(1만 USDT)으로 새로 시작했어요. 선물 기록은 그대로예요.', 9000);
   await pullRemote();
   renderAll();
   await catchUpAll();
-  loadShared(); loadBtcFilter();
   setInterval(loadShared, 5 * 60000); setInterval(loadBtcFilter, 30 * 60000); setInterval(recordEq, 60000); setTimeout(recordEq, 5000);
 }
 start();
