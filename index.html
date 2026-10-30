@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
-/* 레이아웃: 맨 위 = 계좌 띠, 그 아래 = 페이지 (거래 · 시황 · 성과 · 봇). 거래 = 종목 띠 + 차트 | 호가 | 주문 + 아래 탭 */
+/* 레이아웃: 맨 위 = 계좌 띠, 그 아래 = 페이지 (거래 · 시황 · 성과 · 봇 · 스크리너). 거래 = 종목 띠 + 차트 | 호가 | 주문 + 아래 탭 */
 :root{
   --bg:#f4f5f7;--panel:#ffffff;--panel2:#eef0f3;--line:#dfe3e8;--fg:#141820;--mute:#687280;
   --up:#d33a43;--dn:#1d6fe0;--upbg:rgba(211,58,67,.10);--dnbg:rgba(29,111,224,.10);--accent:#a86f00;--accbg:rgba(168,111,0,.10);
@@ -171,6 +171,8 @@ canvas{max-width:100%}
 details.sec{border-top:1px solid var(--line);padding:10px 2px}details.sec>summary{font-weight:600;cursor:pointer;font-size:15px;list-style-position:outside}details.sec .md{margin-top:6px}
 .cmp td b{font-weight:600}
 #perfChart{height:300px;margin-top:8px}
+.scrbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}.scrbar select{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:5px 8px}.scrbar .seg button:disabled{opacity:.4;cursor:default}
+.scrt td.l{white-space:nowrap}
 .legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--mute);margin-top:6px}.legend i{display:inline-block;width:12px;height:3px;border-radius:2px;margin-right:5px;vertical-align:middle}
 .drawbtn.on{background:var(--accbg)!important;color:var(--accent)!important}
 @media (max-width:1100px){.main{grid-template-columns:minmax(0,1fr) 300px}.obpane{display:none}}
@@ -214,7 +216,7 @@ details.sec{border-top:1px solid var(--line);padding:10px 2px}details.sec>summar
   </div>
 
   <nav class="pnav" id="pnav" aria-label="페이지">
-    <button data-page="trade" class="on">거래</button><button data-page="mkt">시황</button><button data-page="perf">성과</button><button data-page="bot">봇</button>
+    <button data-page="trade" class="on">거래</button><button data-page="mkt">시황</button><button data-page="perf">성과</button><button data-page="bot">봇</button><button data-page="scr">스크리너</button>
   </nav>
 
   <div class="page" id="pg-trade">
@@ -244,12 +246,13 @@ details.sec{border-top:1px solid var(--line);padding:10px 2px}details.sec>summar
   <div class="page" id="pg-mkt" hidden></div>
   <div class="page" id="pg-perf" hidden></div>
   <div class="page" id="pg-bot" hidden></div>
+  <div class="page" id="pg-scr" hidden></div>
 </div>
 <div class="drawer" id="setDrawer" hidden><div class="dpanel" role="dialog" aria-label="설정"><div class="dhead"><b>설정</b><button class="btn2" id="setClose">닫기</button></div><div id="setBody" class="tbody"></div></div></div>
 <div class="toast" id="toast"></div>
 <div id="modalRoot"></div>
 <script src="vendor/lightweight-charts-5.1.0.js"></script><!-- 외부 CDN 대신 이 저장소에 둔 사본 (변조 위험 줄이기) · 트레이딩뷰 tv.js 는 그 보기를 고를 때만 불러옴 -->
-<script src="engine.js?v=202610292224"></script>
-<script src="app.js?v=202610292224"></script><!-- ?v= 는 배포할 때마다 바꿔서 브라우저가 예전 파일을 쓰지 않게 -->
+<script src="engine.js?v=202610301900"></script>
+<script src="app.js?v=202610301900"></script><!-- ?v= 는 배포할 때마다 바꿔서 브라우저가 예전 파일을 쓰지 않게 -->
 </body>
 </html>
