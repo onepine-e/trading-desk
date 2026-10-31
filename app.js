@@ -1724,6 +1724,53 @@ function scrAgg(rows, tk) {     // 결과 나온 목록들 평균
   const dn = R.reduce((a, r) => a + r.st[tk].dir_n, 0), dok = R.reduce((a, r) => a + r.st[tk].dir_ok, 0);
   return { n: R.length, hit: avg((s) => s.hit10 / s.k10 * 10), hit5: avg((s) => s.hit5), m0: avg((s) => s.m0), base: avg((s) => s.base * 10), ceil: avg((s) => s.ceil * 10), any: avg((s) => s.hit10 > 0 ? 1 : 0), dn, dok };
 }
+// 스크리너 목록의 현재가 · 작은 그래프. 업비트는 브라우저(Origin 있는 요청)에 10초당 1번만 허용 → 한 번에 여러 종목 ticker 1회, 30초 캐시
+const UPT = { t: 0, key: '', data: {}, busy: null };
+async function upTicker(ms) {
+  const key = ms.slice().sort().join(',');
+  if (UPT.key === key && Date.now() - UPT.t < 30000) return UPT.data;
+  if (UPT.busy) return UPT.busy;
+  if (Date.now() - UPT.t < 10500) await new Promise((r) => setTimeout(r, 10500 - (Date.now() - UPT.t)));
+  UPT.busy = (async () => {
+    try {
+      const r = await fetch('https://api.upbit.com/v1/ticker?markets=' + encodeURIComponent(key), { cache: 'no-store' });
+      if (!r.ok) throw new Error(r.status);
+      const d = {}; for (const x of await r.json()) d[x.market] = +x.trade_price;
+      Object.assign(UPT, { key, data: d });
+    } catch { /* 막히면 저장된 그래프만 */ }
+    UPT.t = Date.now(); UPT.busy = null;
+    return UPT.key === key ? UPT.data : {};
+  })();
+  return UPT.busy;
+}
+const fkp = (v) => v == null || !isFinite(v) ? '–' : v >= 100 ? Math.round(v).toLocaleString('ko-KR') : v >= 1 ? +v.toPrecision(4) + '' : +v.toPrecision(3) + '';
+function scrSpark(L, m, now, live) {
+  const pre = L.spark?.[m] || [], post = L.post?.[m] || [], T = Date.parse(L.decision), H = 36e5;
+  const pts = [...pre.map((v, i) => [T - (pre.length - 1 - i) * H, v]), ...post.map((v, i) => [T + (i + 1) * H, v])].filter((p) => p[1] != null);
+  if (live && now != null) pts.push([Date.now(), now]);
+  if (pts.length < 2) return '<span class="mute">–</span>';
+  const w = 120, h = 26, t0 = pts[0][0], t1 = Math.max(pts[pts.length - 1][0], T + H), vs = pts.map((p) => p[1]), lo = Math.min(...vs), hi = Math.max(...vs);
+  const X = (t) => ((t - t0) / (t1 - t0 || 1) * (w - 4) + 2).toFixed(1), Y = (v) => (h - 3 - (v - lo) / ((hi - lo) || 1) * (h - 6)).toFixed(1);
+  const c0 = pre.length ? pre[pre.length - 1] : pts[0][1], last = pts[pts.length - 1][1];
+  const a = pts.filter((p) => p[0] <= T), b = pts.filter((p) => p[0] >= T);
+  const col = `var(--${last > c0 ? 'up' : last < c0 ? 'dn' : 'mute'})`;
+  const line = (q, c, wd) => q.length > 1 ? `<polyline points="${q.map((p) => X(p[0]) + ',' + Y(p[1])).join(' ')}" fill="none" stroke="${c}" stroke-width="${wd}"/>` : '';
+  const lp = pts[pts.length - 1];
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="display:block"><line x1="${X(T)}" x2="${X(T)}" y1="1" y2="${h - 1}" stroke="var(--line)" stroke-dasharray="2 2"/>${line(a, 'var(--mute)', 1.2)}${line(b, col, 1.6)}${live && now != null ? `<circle cx="${X(lp[0])}" cy="${Y(lp[1])}" r="2.2" fill="${col}"/>` : ''}</svg>`;
+}
+let SCR_LIVE = null;
+setInterval(() => { if (ui.page === 'scr' && SCR_LIVE?.box.isConnected && document.visibilityState === 'visible') scrLive(...SCR_LIVE.args); }, 60000);   // 1분마다 현재가
+async function scrLive(box, L, ms, live) {
+  SCR_LIVE = { box, args: [box, L, ms, live] };
+  const d = await upTicker(ms);
+  if (!box.isConnected) return;
+  for (const m of ms) {
+    const px = d[m], pre = L.spark?.[m] || [], c0 = pre.length ? pre[pre.length - 1] : null;
+    const pc = box.querySelector(`[data-pm="${m}"]`), sp = box.querySelector(`[data-sm="${m}"]`);
+    if (pc) pc.innerHTML = px == null ? '<span class="mute">–</span>' : `${fkp(px)}${c0 ? `<div class="${cls(px / c0 - 1)}" style="font-size:11px">${(px / c0 - 1 >= 0 ? '+' : '') + ((px / c0 - 1) * 100).toFixed(1)}%</div>` : ''}`;
+    if (sp && px != null) sp.innerHTML = scrSpark(L, m, px, live);
+  }
+}
 async function pageScr(el) {
   if (scrChart) { scrChart.remove(); scrChart = null; }
   if (!ghOn()) return needGH(el, '스크리너');
@@ -1796,6 +1843,7 @@ async function pageScr(el) {
   const top = (L.rank[tk] || []).slice(0, 10), m0 = new Set((L.rank.m0 || []).slice(0, 10));
   const pc = (v) => v == null ? '–' : `<span class="${cls(v)}">${(v > 0 ? '+' : '') + (v * 100).toFixed(1)}%</span>`;
   const made = new Date(Date.parse(L.made));
+  const live = Date.now() < Date.parse(ui.scrDay + 'T00:00:00Z') + 864e5;     // 아직 끝나지 않은 날 (다음날 9시 전) → 그래프에 지금 가격 점
   const tiles = `<div class="tiles" style="margin-bottom:8px">
     <div class="tile"><small>이 목록 적중</small><b class="num">${st ? `${st.hit10}<em> / ${st.k10}</em>` : '<em>대기</em>'}</b><em>${st ? `상위 5개 중 ${st.hit5} · 변동성 순 ${st.m0}` : `${T.when} 이후 채점`}</em></div>
     <div class="tile"><small>무작위라면</small><b class="num">${st ? (st.base * 10).toFixed(1) : '–'}</b><em>${st ? `대상 ${st.n}개 중 ${st.ev}개가 움직임` : `대상 ${L.n}종목`}</em></div>
@@ -1807,13 +1855,15 @@ async function pageScr(el) {
     const hit = Math.max(a, -b) >= T.thr, f = R.first[i];
     return `<td class="num">${pc(a)}</td><td class="num">${pc(b)}</td><td class="l">${hit ? `<span class="tag sm ${f > 0 ? 'up' : f < 0 ? 'dn' : 'acc'}">${f > 0 ? '▲ 위로' : f < 0 ? '▼ 아래로' : '✓ 양쪽'}</span>` : '<span class="mute">–</span>'}</td>`;
   };
-  box.innerHTML = tiles + `<div class="tbody" style="padding:0"><table class="t scrt"><thead><tr><th>#</th><th class="l">종목</th><th title="모델이 본 그날 움직일 확률 (연구 자료로 맞춘 값)">확률</th><th title="진입(목록 직후 첫 봉 시가) 대비 ${T.when}까지 최고">최고</th><th title="같은 기간 최저">최저</th><th class="l">결과</th><th title="결정 시점 직전 24시간">24시간</th><th title="직전 24시간 거래대금 ÷ 같은 시간대 20일 평균">거래대금</th><th title="24시간 변동성 ÷ 20일 변동성">변동성 확대</th><th class="l" title="종목별 김프 · 바이낸스 24시간 → 위·아래 어느 쪽이 더 흔했나 (약한 경향)">방향 힌트</th></tr></thead><tbody>
+  box.innerHTML = tiles + `<div class="tbody" style="padding:0"><table class="t scrt"><thead><tr><th>#</th><th class="l">종목</th><th title="업비트 현재가 (10초마다 한 번까지 · 결정 직전 종가 대비)">현재가</th><th class="l" title="결정 전 24시간(회색) → 결정 뒤(색) 1시간 종가 · 점선 = 결정 시각 · 점 = 지금">추이</th><th title="모델이 본 그날 움직일 확률 (연구 자료로 맞춘 값)">확률</th><th title="진입(목록 직후 첫 봉 시가) 대비 ${T.when}까지 최고">최고</th><th title="같은 기간 최저">최저</th><th class="l">결과</th><th title="결정 시점 직전 24시간">24시간</th><th title="직전 24시간 거래대금 ÷ 같은 시간대 20일 평균">거래대금</th><th title="24시간 변동성 ÷ 20일 변동성">변동성 확대</th><th class="l" title="종목별 김프 · 바이낸스 24시간 → 위·아래 어느 쪽이 더 흔했나 (약한 경향)">방향 힌트</th></tr></thead><tbody>
     ${top.map((x, k) => { const f = L.feat?.[x.m] || {}, h = L.hint?.[x.m], w = L.warn?.[x.m] || [];
       return `<tr><td class="num mute">${k + 1}</td><td class="l"><b>${esc(L.name?.[x.m] || x.m)}</b> <span class="mute">${esc(x.m.slice(4))}</span>${w.map((t) => `<span class="tag sm ${t === '유의' ? 'dn' : 'acc'}" style="margin-left:4px">${esc(t)}</span>`).join('')}${m0.has(x.m) ? '' : ' <span class="tag sm" title="20일 변동성 순 10개에는 없는 종목">새 얼굴</span>'}</td>
+        <td class="num scrpx" data-pm="${esc(x.m)}"><span class="mute">…</span></td><td class="l scrsp" data-sm="${esc(x.m)}">${scrSpark(L, x.m, null, live)}</td>
         <td class="num">${x.p != null ? Math.round(x.p * 100) + '%' : '–'}</td>${res(x.m)}<td class="num">${f.r24 != null ? pc(Math.exp(f.r24) - 1) : '–'}</td><td class="num">${f.vr24 != null ? f.vr24.toFixed(1) + '배' : '–'}</td><td class="num">${f.rvx != null ? f.rvx.toFixed(2) : '–'}</td>
         <td class="l" title="${h ? `종목별 김프 ${(h.kp * 100).toFixed(1)}% (대상 중 ${Math.round(h.kp_pct * 100)}번째 백분위) · 바이낸스 24시간 ${(h.bn24 * 100).toFixed(1)}%` : '바이낸스에 없거나 다른 코인'}">${dirTag(h)}${h ? ` <span class="mute num" style="font-size:11px">김프 ${(h.kp * 100).toFixed(1)}% · 바 ${(h.bn24 > 0 ? '+' : '') + (h.bn24 * 100).toFixed(1)}%</span>` : ''}</td></tr>`; }).join('')}
     </tbody></table></div>
     <p class="note">결정 ${ftime(Date.parse(L.decision))} (그 전에 끝난 봉까지) · 진입 기준 = 그 직후 첫 1시간봉 시가 · '새 얼굴' = 20일 변동성만 봤으면 못 고른 종목${L.hint?._n ? ` · 방향 힌트는 바이낸스에 같은 코인이 있는 ${L.hint._n}종목 안에서 비교` : ''}${R ? '' : ` · 결과는 ${T.when} 이후 자동 기록`}</p>`;
+  scrLive(box, L, top.map((x) => x.m), live);
 }
 
 // ───────────────────────────── 시작
