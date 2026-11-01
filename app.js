@@ -1709,7 +1709,7 @@ async function pagePerf(el) {
 }
 
 // ── 스크리너: 업비트 원화 '오늘 크게 움직일 종목' 목록 (tsb7-paper desk/screener.py 가 21시·06시에 만들고 정오·다음날 9시에 채점)
-const SCR_T = { big10n: { lab: '±10% · 정오까지', part: 'noon', thr: 0.10, when: '정오 12시' }, big20d: { lab: '±20% · 다음날 9시까지', part: 'day', thr: 0.20, when: '다음날 9시' } };
+const SCR_T = { big10n: { lab: '±10% · 그날 정오까지', part: 'noon', thr: 0.10, when: '정오 12시' }, big20d: { lab: '±20% · 다음날 9시까지', part: 'day', thr: 0.20, when: '다음날 9시' } };
 const SCR_DH = { 12: '전날 21시', 3: '새벽 6시' };
 let scrChart = null;
 const scrMade = (r) => Date.parse(r.made) || 0;
@@ -1756,10 +1756,16 @@ function scrSpark(L, m, now, live) {
   const col = `var(--${last > c0 ? 'up' : last < c0 ? 'dn' : 'mute'})`;
   const line = (q, c, wd) => q.length > 1 ? `<polyline points="${q.map((p) => X(p[0]) + ',' + Y(p[1])).join(' ')}" fill="none" stroke="${c}" stroke-width="${wd}"/>` : '';
   const lp = pts[pts.length - 1];
-  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="display:block"><line x1="${X(T)}" x2="${X(T)}" y1="1" y2="${h - 1}" stroke="var(--line)" stroke-dasharray="2 2"/>${line(a, 'var(--mute)', 1.2)}${line(b, col, 1.6)}${live && now != null ? `<circle cx="${X(lp[0])}" cy="${Y(lp[1])}" r="2.2" fill="${col}"/>` : ''}</svg>`;
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="display:block"><line x1="${X(T)}" x2="${X(T)}" y1="1" y2="${h - 1}" stroke="var(--line)" stroke-dasharray="2 2"/><line x1="${X(T)}" x2="${w - 1}" y1="${Y(c0)}" y2="${Y(c0)}" stroke="var(--mute)" stroke-opacity=".45" stroke-dasharray="1 2"/>${line(a, 'var(--mute)', 1.2)}${line(b, col, 1.6)}${live && now != null ? `<circle cx="${X(lp[0])}" cy="${Y(lp[1])}" r="2.2" fill="${col}"/>` : ''}</svg>`;
 }
 let SCR_LIVE = null;
 setInterval(() => { if (ui.page === 'scr' && SCR_LIVE?.box.isConnected && document.visibilityState === 'visible') scrLive(...SCR_LIVE.args); }, 60000);   // 1분마다 현재가
+function scrPx(L, m, px) {      // 목록 때 가격(옅은 회색) → 지금 가격 · 목록 때 대비
+  const pre = L.spark?.[m] || [], c0 = pre.length ? pre[pre.length - 1] : null;
+  const a = c0 != null ? `<span class="px0" title="목록 만들 때 (${ftime(Date.parse(L.decision))} 직전 종가)">${fkp(c0)}</span>` : '';
+  if (px == null) return `<span class="pxr">${a}<span class="arr">→</span><span class="mute">…</span></span>`;
+  return `<span class="pxr">${a}<span class="arr">→</span>${fkp(px)}</span>${c0 ? `<div class="${cls(px / c0 - 1)}" style="font-size:11px">${(px / c0 - 1 >= 0 ? '+' : '') + ((px / c0 - 1) * 100).toFixed(1)}%</div>` : ''}`;
+}
 async function scrLive(box, L, ms, live) {
   SCR_LIVE = { box, args: [box, L, ms, live] };
   const d = await upTicker(ms);
@@ -1767,7 +1773,7 @@ async function scrLive(box, L, ms, live) {
   for (const m of ms) {
     const px = d[m], pre = L.spark?.[m] || [], c0 = pre.length ? pre[pre.length - 1] : null;
     const pc = box.querySelector(`[data-pm="${m}"]`), sp = box.querySelector(`[data-sm="${m}"]`);
-    if (pc) pc.innerHTML = px == null ? '<span class="mute">–</span>' : `${fkp(px)}${c0 ? `<div class="${cls(px / c0 - 1)}" style="font-size:11px">${(px / c0 - 1 >= 0 ? '+' : '') + ((px / c0 - 1) * 100).toFixed(1)}%</div>` : ''}`;
+    if (pc) pc.innerHTML = scrPx(L, m, px);
     if (sp && px != null) sp.innerHTML = scrSpark(L, m, px, live);
   }
 }
@@ -1785,13 +1791,15 @@ async function pageScr(el) {
   const lists = I.rows.filter((r) => r.day === ui.scrDay);
   if (!lists.some((r) => r.dh === ui.scrDh)) ui.scrDh = (lists.find((r) => r.dh === 3) || lists[0]).dh;
   const row = lists.find((r) => r.dh === ui.scrDh);
+  const d0 = Date.parse(ui.scrDay + 'T00:00:00Z'), kd = (t) => { const x = new Date(t); return `${x.getUTCMonth() + 1}/${x.getUTCDate()}`; };
+  const WHEN = T.part === 'noon' ? `${kd(d0)} 12시` : `${kd(d0 + 864e5)} 9시`;      // 이 날짜 목록의 채점 시각 (다음날 9시 = 그 다음 날 09시)
   const same = I.rows.filter((r) => r.dh === ui.scrDh);
   const A = scrAgg(same, tk), ref = I.model?.oos?.[ui.scrDh]?.[tk];
   const f1 = (v) => v == null || !isFinite(v) ? '–' : v.toFixed(1), f0 = (v) => v == null || !isFinite(v) ? '–' : Math.round(v * 100) + '%';
   const dlab = (k) => { const d = new Date(k + 'T00:00:00Z'); return `${d.getUTCMonth() + 1}/${d.getUTCDate()} (${'일월화수목금토'[d.getUTCDay()]})`; };
   el.innerHTML = `<div class="pg"><h2 class="pt">급변 스크리너 <small>업비트 원화 · 그날 09시부터 크게 움직일(위든 아래든) 종목을 미리 10개 · 방향은 모름 → 관심·회피 목록</small></h2>
       <div class="scrbar"><select id="scrDay" aria-label="날짜">${days.slice(0, 120).map((k) => `<option value="${k}" ${k === ui.scrDay ? 'selected' : ''}>${dlab(k)} 09시 기준</option>`).join('')}</select>
-        <div class="seg" id="scrDh">${[12, 3].map((h) => `<button data-dh="${h}" class="${h === ui.scrDh ? 'on' : ''}" ${lists.some((r) => r.dh === h) ? '' : 'disabled'}>${SCR_DH[h]} 목록</button>`).join('')}</div>
+        <div class="seg" id="scrDh">${[12, 3].map((h) => `<button data-dh="${h}" class="${h === ui.scrDh ? 'on' : ''}" ${lists.some((r) => r.dh === h) ? '' : `disabled title="이 날은 ${SCR_DH[h]} 목록이 만들어지지 않았어요 (실행이 제때 안 됨)"`}>${SCR_DH[h]} 목록</button>`).join('')}</div>
         <div class="seg" id="scrT">${Object.entries(SCR_T).map(([k, v]) => `<button data-t="${k}" class="${k === tk ? 'on' : ''}">${v.lab}</button>`).join('')}</div></div>
       <div id="scrList"><div class="empty">불러오는 중…</div></div></div>
     <div class="pg"><h2 class="pt">누적 적중 <small>${SCR_DH[ui.scrDh]} 목록 · ${T.lab} · 결과가 나온 ${A ? A.n : 0}일</small></h2>
@@ -1845,24 +1853,24 @@ async function pageScr(el) {
   const made = new Date(Date.parse(L.made));
   const live = Date.now() < Date.parse(ui.scrDay + 'T00:00:00Z') + 864e5;     // 아직 끝나지 않은 날 (다음날 9시 전) → 그래프에 지금 가격 점
   const tiles = `<div class="tiles" style="margin-bottom:8px">
-    <div class="tile"><small>이 목록 적중</small><b class="num">${st ? `${st.hit10}<em> / ${st.k10}</em>` : '<em>대기</em>'}</b><em>${st ? `상위 5개 중 ${st.hit5} · 변동성 순 ${st.m0}` : `${T.when} 이후 채점`}</em></div>
+    <div class="tile"><small>이 목록 적중</small><b class="num">${st ? `${st.hit10}<em> / ${st.k10}</em>` : '<em>대기</em>'}</b><em>${st ? `상위 5개 중 ${st.hit5} · 변동성 순 ${st.m0}` : `${WHEN} 이후 채점`}</em></div>
     <div class="tile"><small>무작위라면</small><b class="num">${st ? (st.base * 10).toFixed(1) : '–'}</b><em>${st ? `대상 ${st.n}개 중 ${st.ev}개가 움직임` : `대상 ${L.n}종목`}</em></div>
     <div class="tile"><small>모델</small><b style="font-size:16px">${L.model === 'M1' ? 'M1 · 업비트 1시간봉' : 'M0 · 20일 변동성 순 (임시)'}</b><em>만든 시각 ${ftime(made.getTime())}${L.model !== 'M1' ? ' · model.json 올리면 바뀜' : ''}</em></div></div>`;
   const dirTag = (h) => !h || h.lean == null ? '<span class="mute">–</span>' : h.lean >= 0.15 ? '<span class="tag sm up">↑ 위 쪽</span>' : h.lean <= -0.15 ? '<span class="tag sm dn">↓ 아래 쪽</span>' : '<span class="mute">중립</span>';
   const res = (m) => {
-    const i = pos[m]; if (!R || i == null) return '<td class="num mute" colspan="3" style="text-align:center">' + (R ? '–' : `${T.when} 이후`) + '</td>';
+    const i = pos[m]; if (!R || i == null) return '<td class="num mute" colspan="3" style="text-align:center">' + (R ? '–' : `${WHEN} 이후`) + '</td>';
     const a = R.mfe[i], b = R.mae[i]; if (a == null) return '<td class="num mute" colspan="3">시세 없음</td>';
     const hit = Math.max(a, -b) >= T.thr, f = R.first[i];
     return `<td class="num">${pc(a)}</td><td class="num">${pc(b)}</td><td class="l">${hit ? `<span class="tag sm ${f > 0 ? 'up' : f < 0 ? 'dn' : 'acc'}">${f > 0 ? '▲ 위로' : f < 0 ? '▼ 아래로' : '✓ 양쪽'}</span>` : '<span class="mute">–</span>'}</td>`;
   };
-  box.innerHTML = tiles + `<div class="tbody" style="padding:0"><table class="t scrt"><thead><tr><th>#</th><th class="l">종목</th><th title="업비트 현재가 (10초마다 한 번까지 · 결정 직전 종가 대비)">현재가</th><th class="l" title="결정 전 24시간(회색) → 결정 뒤(색) 1시간 종가 · 점선 = 결정 시각 · 점 = 지금">추이</th><th title="모델이 본 그날 움직일 확률 (연구 자료로 맞춘 값)">확률</th><th title="진입(목록 직후 첫 봉 시가) 대비 ${T.when}까지 최고">최고</th><th title="같은 기간 최저">최저</th><th class="l">결과</th><th title="결정 시점 직전 24시간">24시간</th><th title="직전 24시간 거래대금 ÷ 같은 시간대 20일 평균">거래대금</th><th title="24시간 변동성 ÷ 20일 변동성">변동성 확대</th><th class="l" title="종목별 김프 · 바이낸스 24시간 → 위·아래 어느 쪽이 더 흔했나 (약한 경향)">방향 힌트</th></tr></thead><tbody>
+  box.innerHTML = tiles + `<div class="tbody" style="padding:0"><table class="t scrt"><thead><tr><th>#</th><th class="l">종목</th><th title="회색 = 목록을 만들 때(결정 직전 종가) · 검정 = 지금 업비트 가격 · 아래 = 목록 때 대비">목록 때 → 지금</th><th class="l" title="결정 전 24시간(회색) → 결정 뒤(색) 1시간 종가 · 점선 = 결정 시각 · 점 = 지금">추이</th><th title="모델이 본 그날 움직일 확률 (연구 자료로 맞춘 값)">확률</th><th title="진입(목록 직후 첫 봉 시가) 대비 ${T.when}까지 최고">최고</th><th title="같은 기간 최저">최저</th><th class="l">결과</th><th title="결정 시점 직전 24시간">24시간</th><th title="직전 24시간 거래대금 ÷ 같은 시간대 20일 평균">거래대금</th><th title="24시간 변동성 ÷ 20일 변동성">변동성 확대</th><th class="l" title="종목별 김프 · 바이낸스 24시간 → 위·아래 어느 쪽이 더 흔했나 (약한 경향)">방향 힌트</th></tr></thead><tbody>
     ${top.map((x, k) => { const f = L.feat?.[x.m] || {}, h = L.hint?.[x.m], w = L.warn?.[x.m] || [];
       return `<tr><td class="num mute">${k + 1}</td><td class="l"><b>${esc(L.name?.[x.m] || x.m)}</b> <span class="mute">${esc(x.m.slice(4))}</span>${w.map((t) => `<span class="tag sm ${t === '유의' ? 'dn' : 'acc'}" style="margin-left:4px">${esc(t)}</span>`).join('')}${m0.has(x.m) ? '' : ' <span class="tag sm" title="20일 변동성 순 10개에는 없는 종목">새 얼굴</span>'}</td>
-        <td class="num scrpx" data-pm="${esc(x.m)}"><span class="mute">…</span></td><td class="l scrsp" data-sm="${esc(x.m)}">${scrSpark(L, x.m, null, live)}</td>
+        <td class="num scrpx" data-pm="${esc(x.m)}">${scrPx(L, x.m, null)}</td><td class="l scrsp" data-sm="${esc(x.m)}">${scrSpark(L, x.m, null, live)}</td>
         <td class="num">${x.p != null ? Math.round(x.p * 100) + '%' : '–'}</td>${res(x.m)}<td class="num">${f.r24 != null ? pc(Math.exp(f.r24) - 1) : '–'}</td><td class="num">${f.vr24 != null ? f.vr24.toFixed(1) + '배' : '–'}</td><td class="num">${f.rvx != null ? f.rvx.toFixed(2) : '–'}</td>
         <td class="l" title="${h ? `종목별 김프 ${(h.kp * 100).toFixed(1)}% (대상 중 ${Math.round(h.kp_pct * 100)}번째 백분위) · 바이낸스 24시간 ${(h.bn24 * 100).toFixed(1)}%` : '바이낸스에 없거나 다른 코인'}">${dirTag(h)}${h ? ` <span class="mute num" style="font-size:11px">김프 ${(h.kp * 100).toFixed(1)}% · 바 ${(h.bn24 > 0 ? '+' : '') + (h.bn24 * 100).toFixed(1)}%</span>` : ''}</td></tr>`; }).join('')}
     </tbody></table></div>
-    <p class="note">결정 ${ftime(Date.parse(L.decision))} (그 전에 끝난 봉까지) · 진입 기준 = 그 직후 첫 1시간봉 시가 · '새 얼굴' = 20일 변동성만 봤으면 못 고른 종목${L.hint?._n ? ` · 방향 힌트는 바이낸스에 같은 코인이 있는 ${L.hint._n}종목 안에서 비교` : ''}${R ? '' : ` · 결과는 ${T.when} 이후 자동 기록`}</p>`;
+    <p class="note">결정 ${ftime(Date.parse(L.decision))} (그 전에 끝난 봉까지) · 진입 기준 = 그 직후 첫 1시간봉 시가 · '새 얼굴' = 20일 변동성만 봤으면 못 고른 종목${L.hint?._n ? ` · 방향 힌트는 바이낸스에 같은 코인이 있는 ${L.hint._n}종목 안에서 비교` : ''}${R ? '' : ` · 결과는 ${WHEN} 이후 자동 기록`}</p>`;
   scrLive(box, L, top.map((x) => x.m), live);
 }
 
