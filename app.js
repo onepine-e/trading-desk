@@ -60,7 +60,7 @@ const cls = (x) => x > 0 ? 'up' : x < 0 ? 'dn' : '';
 const ftime = (t) => { if (!t) return '–'; const d = new Date(t); const p = (n) => String(n).padStart(2, '0'); return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
 const unit = () => 'USDT';
 const isPhone = () => matchMedia('(max-width: 760px)').matches;   // 폰: 차트 누르기로 가격 넣지 않음, 키보드 안 띄움
-const CHART_TIP = () => isPhone() ? '가격은 주문창 왼쪽 호가를 눌러 넣어요' : '가격은 호가창을 눌러 넣어요';
+const CHART_TIP = () => '';
 const futPx = (q) => q.mark > 0 ? q.mark : q.last > 0 ? q.last : (q.bid > 0 && q.ask > 0 ? (q.bid + q.ask) / 2 : undefined);
 const pxOf = (mkt, s) => mkt === 'fut' ? futPx(P.fut[s]) : P.spot[s].last;
 const prices = () => ({ spot: Object.fromEntries(SYMS.map((s) => [s, P.spot[s].last])), fut: Object.fromEntries(SYMS.map((s) => [s, futPx(P.fut[s])])) });
@@ -1090,9 +1090,9 @@ function renderForm() {
   const levF = isFut ? `<div><div class="row" style="justify-content:space-between"><span class="lbl">레버리지 (격리)</span><span class="num acc" id="levTxt">${ui.lev}x</span></div><div class="lev"><input type="range" id="fLev" min="1" max="100" value="${ui.lev}"><div class="field" style="width:70px"><input id="fLevN" inputmode="numeric" value="${ui.lev}"><span>x</span></div></div></div>` : '';
   const entry = isFut || buy;
   const pm = !!cfg.sltpPct, u2 = pm ? '%' : '';
-  const sltp = entry ? `<div class="row" style="justify-content:space-between"><span class="lbl">손절 · 익절 (선택)</span><div class="seg mini" id="slMode"><button data-m="px" class="${pm ? '' : 'on'}">가격</button><button data-m="pct" class="${pm ? 'on' : ''}">진입가 ±%</button></div></div>
+  const sltp = entry ? `<div class="row" style="justify-content:space-between"><span class="lbl">손절 · 익절</span><div class="seg mini" id="slMode"><button data-m="px" class="${pm ? '' : 'on'}">가격</button><button data-m="pct" class="${pm ? 'on' : ''}" title="진입가 대비 %">±%</button></div></div>
     <div class="row"><div class="field" style="flex:1"><input id="fSL" inputmode="decimal" placeholder="${pm ? '손절 −%' : '손절가 없음'}"><span>${u2}</span></div><div class="field" style="flex:1"><input id="fTP" inputmode="decimal" placeholder="${pm ? '익절 +%' : '익절가 없음'}"><span>${u2}</span></div></div>` : '';
-  const jr = entry ? `<details class="jr" id="jr"><summary>매매 일지 (진입 이유를 남기면 셋업별 기대값이 계산돼요)</summary><div class="jrin">
+  const jr = entry ? `<details class="jr" id="jr"><summary>매매 일지 — 셋업 · 감정 · 이유</summary><div class="jrin">
       <div class="row"><div class="field" style="flex:1"><select id="fSetup"><option value="">셋업 선택</option>${ME.setups.map((x) => `<option>${esc(x)}</option>`).join('')}</select></div>
       <div class="field" style="flex:1"><select id="fEmo"><option value="">지금 감정</option>${['차분', '확신', '조급', '불안', '본전 생각', '욕심'].map((x) => `<option>${x}</option>`).join('')}</select></div></div>
       <textarea id="fReason" placeholder="왜 지금 들어가나요? (예: 4시간봉 박스 상단 거래량 돌파, 손절은 박스 안 복귀)"></textarea></div></details>` : '';
@@ -1103,7 +1103,7 @@ function renderForm() {
       <div class="field"><input id="fAmt" inputmode="decimal" placeholder="0"><span>${amtUnit}</span></div></div>
     <div class="pcts">${[10, 25, 50, 100].map((p) => `<button data-p="${p}">${p}%</button>`).join('')}</div>
     ${sltp}<div class="calc num" id="calc"></div>${jr}${btns}
-    <div class="note">${isFut ? '수수료 시장가 0.05% · 지정가 0.02% · 유지증거금 0.5% · 8시간마다 펀딩비' : '수수료 0.1% (바이낸스 현물) · 최소 주문 5 USDT'}</div></div>`;
+    </div>`;
   $$('#sideSeg button').forEach((b) => b.onclick = () => { ui.side = b.dataset.side; renderForm(); });
   $$('#typeSeg button').forEach((b) => b.onclick = () => { ui.otype = b.dataset.t; renderForm(); });
   const lev = $('#fLev'), levN = $('#fLevN');
@@ -1199,7 +1199,7 @@ function renderTabBody() {
 function tabPos(body, st) {
   const pr = prices(), ro = readOnly();
   const hs = Object.entries(st.spot.hold), fs = Object.entries(st.fut.pos);
-  if (!hs.length && !fs.length) { body.innerHTML = '<div class="empty">보유 중인 포지션이 없어요. 위 주문창에서 시작하세요.</div>'; return; }
+  if (!hs.length && !fs.length) { body.innerHTML = '<div class="empty">보유 포지션 없음</div>'; return; }
   let h = '';
   if (hs.length) {
     h += `<table class="t"><thead><tr><th class="l">현물</th><th>수량</th><th>평균 단가</th><th>현재가</th><th>평가 금액</th><th>평가 손익</th><th>손절 / 익절</th>${ro ? '' : '<th></th>'}</tr></thead><tbody>`;
@@ -1402,7 +1402,7 @@ function md(t) {
   for (const l of lines) {
     if (/^\|/.test(l)) { if (/^\|[\s:|-]+\|$/.test(l)) continue; if (!inT) { out += '<div class="tw"><table>'; inT = true; } out += '<tr>' + l.split('|').slice(1, -1).map((c) => `<td>${inl(c.trim())}</td>`).join('') + '</tr>'; continue; }
     if (inT) { out += '</table></div>'; inT = false; }
-    if (/^\s*[-*] /.test(l)) { if (!inL) { out += '<ul>'; inL = true; } out += `<li>${inl(l.replace(/^\s*[-*] /, ''))}</li>`; continue; }
+    if (/^\s*[-*] /.test(l)) { if (!inL) { out += '<ul>'; inL = true; } const it = l.replace(/^\s*[-*] /, ''); out += /^→ ?정리/.test(it) ? `<li class="sum">${inl(it.replace(/^→ ?정리:?\s*/, ''))}</li>` : `<li>${inl(it)}</li>`; continue; }
     if (inL) { out += '</ul>'; inL = false; }
     const m = l.match(/^(#{1,3}) (.*)/);
     if (m) out += `<h${m[1].length}>${inl(m[2])}</h${m[1].length}>`; else if (l.trim()) out += `<p>${inl(l)}</p>`;
@@ -1414,20 +1414,27 @@ function tabBot(body) {
   if (!BOT) { body.innerHTML = `<div class="empty">${SHARED.live ? '봇 기록을 읽지 못했어요 — 5분 뒤 다시 시도해요.' : '봇 기록 불러오는 중…'}</div>`; return; }
   if (!BOT.rows.length) { body.innerHTML = '<div class="empty">봇 기록을 찾지 못했어요 (paper/*/equity.csv).</div>'; return; }
   const rec = Object.fromEntries((BOT.rec || []).map((r) => [r.acct, r]));
-  body.innerHTML = `<table class="t"><thead><tr><th class="l">계좌</th><th>평가액 (원)</th><th>수익률</th><th>제때 실행했다면</th><th>놓친 거래</th><th>보유</th><th class="l">BTC 필터</th><th class="l">갱신</th><th>추이</th></tr></thead><tbody>${BOT.rows.map((r) => {
+  body.innerHTML = `<table class="t"><thead><tr><th class="l">계좌</th><th>평가액 (원)</th><th>수익률</th><th>제때 실행했다면</th><th>놓친 거래</th><th class="l">보유</th><th>추이</th></tr></thead><tbody>${BOT.rows.map((r) => {
     const x = r.last, c = rec[r.a], dip = BOT_DIP.has(r.a);
     return `<tr${BOT_BENCH.has(r.a) ? ' class="mute"' : ''}><td class="l"><b class="ba">${r.a}</b>${botLabel(r.a)}</td><td class="num">${fkrw(+x.equity)}</td><td class="num ${cls(+x.ret)}">${fpct(+x.ret)}</td>
-      <td class="num ${c ? cls(+c.ontime_ret) : ''}">${dip ? '<span class="mute" title="처음부터 제때 했다면 방식으로 계산">= 같음</span>' : c ? fpct(+c.ontime_ret) : '–'}</td><td class="num">${dip ? '–' : c ? c.ontime_only : '–'}</td><td class="l">${esc(x.holdings || '–')}</td>
-      <td class="l">${x.btc_filter_4h === 'True' ? '<span class="up">켜짐</span>' : '<span class="dn">꺼짐</span>'}</td><td class="l num">${esc(x.time_kst)}</td><td>${spark(r.hist)}</td></tr>`;
-  }).join('')}${(BOT.missing || []).filter((a) => !BOT_BENCH.has(a)).map((a) => `<tr class="mute"><td class="l"><b class="ba">${a}</b>${botLabel(a)}</td><td colspan="8" class="l">첫 실행 대기 — 다음 4시간 확인(01·05·09·13·17·21시 2분) 때 기록 시작</td></tr>`).join('')}</tbody></table><p class="note">'제때 실행했다면' = 하루 한 번 대조 실행이 놓친 매수·늦은 매도를 다음 봉 시가로 반영한 값.
+      <td class="num ${c ? cls(+c.ontime_ret) : ''}">${dip ? '<span class="mute" title="처음부터 제때 했다면 방식으로 계산">= 같음</span>' : c ? fpct(+c.ontime_ret) : '–'}</td><td class="num">${dip ? '–' : c ? c.ontime_only : '–'}</td><td class="l">${holdTxt(x.holdings)}</td><td>${spark(r.hist)}</td></tr>`;
+  }).join('')}${(BOT.missing || []).filter((a) => !BOT_BENCH.has(a)).map((a) => `<tr class="mute"><td class="l"><b class="ba">${a}</b>${botLabel(a)}</td><td colspan="6" class="l">첫 실행 대기 — 다음 4시간 확인(01·05·09·13·17·21시 2분) 때 기록 시작</td></tr>`).join('')}</tbody></table><details class="sec in"><summary>규칙</summary><p class="note">'제때 실행했다면' = 하루 한 번 대조 실행이 놓친 매수·늦은 매도를 다음 봉 시가로 반영한 값.
     <span class="tag mdl m-dip">급락</span> E·F 는 1시간 −2% 급락 중 BTC·코인 50일선 위 · 공포탐욕 ≥ 50 · 펀딩 3일 ≥ 0.01% 인 것만 −1% 지정가(12시간) → 24시간 보유. 4시간마다 확인할 때 직전 1시간봉·5분봉으로 그 시각에 했던 것처럼 계산 (처음부터 제때 방식). F 의 TSB7 은 A 와 같은 규칙.
-    <span class="tag mdl m-bench">기준</span> BH·BF 는 비교용 기준선 (예전 H·F).</p>`;
+    <span class="tag mdl m-bench">기준</span> BH·BF 는 비교용 기준선 (예전 H·F).</p></details>`;
+}
+function botStamp() {      // 모든 계좌가 같은 시각에 함께 갱신되므로 표 대신 제목 옆에 한 번만
+  const x = BOT?.rows?.[0]?.last; if (!x) return '';
+  return ` · BTC 필터 ${x.btc_filter_4h === 'True' ? '<span class="up">켜짐</span>' : '<span class="dn">꺼짐</span>'} · ${esc(String(x.time_kst || '').slice(5))} 갱신`;
+}
+function holdTxt(h) {      // 'TSB7:SOL, 급락:XRP' → SOL ᵀˢᴮ⁷ … / 'BTC보유:BTC' → BTC
+  if (!h) return '–';
+  return String(h).split(/,\s*/).map((x) => { const [st, c] = x.includes(':') ? x.split(':') : ['', x]; return `${esc(c)}${st && !/보유/.test(st) ? ` <span class="mute" style="font-size:11px">${esc(st)}</span>` : ''}`; }).join(', ');
 }
 function spark(v) {
   if (!v || v.length < 2) return '';
   const w = 90, h = 22, lo = Math.min(...v), hi = Math.max(...v);
   const pts = v.map((y, i) => `${(i / (v.length - 1) * w).toFixed(1)},${(h - 2 - (y - lo) / ((hi - lo) || 1) * (h - 4)).toFixed(1)}`).join(' ');
-  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><polyline points="${pts}" fill="none" stroke="var(--${v[v.length - 1] >= v[0] ? 'up' : 'dn'})" stroke-width="1.5"/></svg>`;
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><polyline points="${pts}" fill="none" stroke="var(--${v[v.length - 1] > v[0] ? 'up' : v[v.length - 1] < v[0] ? 'dn' : 'mute'})" stroke-width="1.5"/></svg>`;
 }
 function tabSet(body) {
   const ST = [['MASimple@tv-basicstudies', '이동평균'], ['MAExp@tv-basicstudies', '지수이동평균'], ['BB@tv-basicstudies', '볼린저밴드'], ['RSI@tv-basicstudies', 'RSI'], ['MACD@tv-basicstudies', 'MACD'], ['Volume@tv-basicstudies', '거래량'], ['VWAP@tv-basicstudies', 'VWAP'], ['IchimokuCloud@tv-basicstudies', '일목균형표'], ['StochasticRSI@tv-basicstudies', '스토캐스틱 RSI'], ['ATR@tv-basicstudies', 'ATR']];
@@ -1530,7 +1537,7 @@ function renderPage() {
   if (ui.page === 'mkt') pageMkt($('#pg-mkt'));
   else if (ui.page === 'perf') pagePerf($('#pg-perf'));
   else if (ui.page === 'scr') pageScr($('#pg-scr'));
-  else if (ui.page === 'bot') { const el = $('#pg-bot'); el.innerHTML = `<div class="pg"><h2 class="pt">가상매매 봇 <small>업비트 원화 · 4시간봉 마감마다${SHARED.live ? '' : SHARED.t ? ` · <span class="acc">${ftime(SHARED.t)} 에 읽은 기록 — 새로 읽는 중…</span>` : ''}</small></h2><div class="tbody" style="padding:0" id="botBody"></div></div>`; tabBot($('#botBody')); }
+  else if (ui.page === 'bot') { const el = $('#pg-bot'); el.innerHTML = `<div class="pg"><h2 class="pt">가상매매 봇 <small>업비트 원화 · 4시간봉 마감마다${botStamp()}${SHARED.live ? '' : SHARED.t ? ` · <span class="acc">${ftime(SHARED.t)} 에 읽은 기록 — 새로 읽는 중…</span>` : ''}</small></h2><div class="tbody" style="padding:0" id="botBody"></div></div>`; tabBot($('#botBody')); }
 }
 const needGH = (el, what) => { el.innerHTML = `<div class="pg"><div class="empty">${what}은(는) GitHub 저장소에서 읽어요. 오른쪽 위 ⚙ 설정에서 GitHub 를 연결해 주세요.</div></div>`; };
 const KIND = { morning: '아침', evening: '저녁', review: '주간' };
@@ -1543,7 +1550,7 @@ function numTiles() {
   if (!MKT) return '<div class="empty">숫자 시황이 아직 없어요. 가상매매 봇이 다음에 돌 때(4시간마다) 만들어져요.</div>';
   const x = MKT.extra || {}, b = MKT.coins?.BTC || {}, f = MKT.btc_filter, T = [];
   if (x.fng) T.push(`<div class="tile"><small>공포·탐욕</small><b>${x.fng.now} <em>${esc(x.fng.label)}</em></b><div class="gauge"><i style="left:calc(${x.fng.now}% - 1px)"></i></div><em>어제 ${x.fng.yday}${x.fng.week ? ' · 1주 전 ' + x.fng.week : ''}</em></div>`);
-  if (b.usd) T.push(`<div class="tile"><small>BTC (바이낸스)</small><b class="num">${fpx(b.usd)}</b><em>24시간 ${pc1(b.chg24h)} · 7일 ${pc1(b.chg7d)}</em></div>`);
+  if (b.usd) T.push(`<div class="tile"><small>BTC</small><b class="num">${fpx(b.usd)}</b><em>24시간 ${pc1(b.chg24h)} · 7일 ${pc1(b.chg7d)}</em></div>`);
   if (f) T.push(`<div class="tile"><small>BTC 50일선 필터</small><b class="${f.on ? 'up' : 'dn'}">${f.on ? '켜짐' : '꺼짐'}</b><em>50일선 대비 ${pc1(f.gap)}</em></div>`);
   if (x.global) T.push(`<div class="tile"><small>BTC 점유율</small><b class="num">${(x.global.btcDom * 100).toFixed(1)}%</b><em>전체 ${usdShort(x.global.mcap)} ${pc1(x.global.chg24h)}</em></div>`);
   if (x.movers) T.push(`<div class="tile"><small>오른 종목 비율</small><b class="num ${x.movers.breadth >= 0.5 ? 'up' : 'dn'}">${Math.round(x.movers.breadth * 100)}%</b><em>바이낸스 ${x.movers.n}개 중</em></div>`);
@@ -1594,7 +1601,6 @@ function heroHtml(e, doc) {
   if (S.grade) rows.push(['과정 점수', `<span class="tag acc">${esc(S.grade)}</span>`]);
   if (S.focus) rows.push(['다음 주 과제', `<b>${esc(S.focus)}</b>`]);
   return `<div class="hero ${S.mood ? 'm-' + moodCls(S.mood) : ''}"><div class="note">${KIND[e.kind] || ''} · ${ftime(e.t)}</div><h2>${esc(S.headline || doc.title || e.title || '')}</h2>
-    ${S.headline && doc.title ? `<div class="note">${esc(doc.title)}</div>` : ''}
     ${pts.length ? `<ul>${pts.map((p) => `<li>${inl(p)}</li>`).join('')}</ul>` : ''}
     ${rows.length ? `<div class="hrow">${rows.map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join('')}</div>` : ''}</div>`;
 }
@@ -1627,7 +1633,7 @@ async function pageMkt(el) {
   $('#bview').innerHTML = BRIEF_TXT[e.id] == null ? '<div class="empty">불러오지 못했어요</div>' : docHtml(e, BRIEF_TXT[e.id]);
 }
 
-// ── 성과: 세 계좌 비교 + 주간 평가
+// ── 성과: 계좌 비교 + 주간 평가
 function mdd(vals) { let pk = -Infinity, m = 0; for (const v of vals) { if (v == null) continue; pk = Math.max(pk, v); if (pk > 0) m = Math.min(m, Math.max(-1, v / pk - 1)); } return m; }
 const ddPts = (pts) => pts.flatMap((p) => p.lo != null ? [p.lo, p.v] : [p.v]);     // 그날 최저까지 넣어 낙폭 계산
 function acctSeries(st, hist, livePx) {     // 합계(현물+선물) 평가액 시계열 + 지금
@@ -1672,9 +1678,9 @@ async function pagePerf(el) {
   el.innerHTML = `<div class="pg"><h2 class="pt">내 재량 연습 <small>셋업 하나로 100회 → 셋업별 기대값으로 판정</small></h2>
       <div class="tiles"><div class="tile"><small>끝난 거래</small><b class="num">${sm.n} <em>/ 100</em></b><div class="prog" style="margin-top:6px"><i style="width:${prog}%"></i></div></div>
       <div class="tile"><small>승률</small><b class="num">${tp(sm.win)}</b><em>손익비 ${sm.payoff ? sm.payoff.toFixed(2) : '–'}</em></div>
-      <div class="tile"><small>거래당 기대값</small><b class="num ${cls(sm.expR)}">${sm.expR != null ? sm.expR.toFixed(2) + 'R' : '–'}</b><em>${fsign(sm.exp)} USDT</em></div>
+      <div class="tile"><small>거래당 기대값</small><b class="num ${cls(sm.expR)}">${sm.expR != null ? sm.expR.toFixed(2) + 'R' : '–'}</b><em>${fsign(sm.exp)} USDT${sm.nR != null && sm.nR < sm.n ? ` · R 은 손절 둔 ${sm.nR}건만` : ''}</em></div>
       <div class="tile"><small>규칙 준수</small><b class="num">${tp(sm.rule)}</b><em>돌아보기를 남긴 거래 기준</em></div></div></div>
-    <div class="pg"><h2 class="pt">세 계좌 비교 <small>시작일이 달라 같은 기간 비교는 아니에요 · 봇은 업비트 원화 · 누적 손익률 = 총 손익 ÷ 처음 자금 (리셋 전 손실 포함 — 전액 손실 두 번이면 −200%) · 체결 조건도 달라요: Claude 선물은 근사 가격·펀딩 없음</small></h2>
+    <div class="pg"><h2 class="pt">계좌 비교 <small>누적 손익률 = 총 손익 ÷ 처음 자금 · 봇은 업비트 원화</small></h2>
       <div class="tbody" style="padding:0"><table class="t cmp"><thead><tr><th class="l">계좌</th><th title="총 손익 ÷ 처음 자금. 자금 리셋으로 채운 돈은 손익이 아님">누적 손익률</th><th>현물</th><th>선물</th><th title="일별 기록(그날 최저 포함) 기준">최대 낙폭</th><th>끝난 거래</th><th>승률</th><th>평균 R</th><th class="l">시작</th></tr></thead><tbody>
       ${rows.map((r) => `<tr><td class="l">${r.color ? `<i style="display:inline-block;width:10px;height:3px;background:${r.color};vertical-align:middle;margin-right:6px"></i>` : ''}<b>${r.name}</b> ${r.lab || `<span class="mute">${esc(r.sub)}</span>`}</td><td class="num"><b>${pc1(r.r)}</b></td><td class="num">${pc1(r.spot)}</td><td class="num">${pc1(r.fut)}</td><td class="num">${pc1(r.dd)}</td><td class="num">${r.n ?? '–'}</td><td class="num">${tp(r.win)}</td><td class="num">${r.R != null ? r.R.toFixed(2) : '–'}</td><td class="l num mute">${r.since ? ftime(r.since).slice(0, 5) : '–'}</td></tr>`).join('')}
       </tbody></table></div>
@@ -1815,7 +1821,7 @@ async function pageScr(el) {
       <div class="tbody" style="padding:0;margin-top:8px"><table class="t"><thead><tr><th class="l">날짜</th><th class="l">모델</th><th>대상</th><th>상위 10 적중</th><th>상위 5</th><th>변동성 순</th><th>무작위</th><th>최대 가능</th></tr></thead><tbody>
       ${same.slice(0, 21).map((r) => { const s = r.st[tk]; return `<tr data-sd="${r.day}" style="cursor:pointer"><td class="l">${dlab(r.day)}</td><td class="l mute">${esc(r.model)}</td><td class="num">${r.n}</td>${s ? `<td class="num"><b class="${s.hit10 > s.base * 10 ? 'acc' : ''}">${s.hit10}</b>/${s.k10}</td><td class="num">${s.hit5}</td><td class="num">${s.m0}</td><td class="num mute">${(s.base * 10).toFixed(1)}</td><td class="num mute">${Math.round(s.ceil * 10)}</td>` : `<td colspan="5" class="mute">${T.when} 이후 채점</td>`}</tr>`; }).join('')}
       </tbody></table></div></div>
-    <div class="pg"><details class="sec"><summary>읽는 법</summary><div class="md">
+    <div class="pg"><details class="sec in"><summary>읽는 법</summary><div class="md">
       <p><b>무엇을 고르나.</b> 그날 09시(업비트 하루 시작) 직후 정오까지 ±10%, 또는 다음날 9시까지 ±20% 넘게 움직일 종목. <b>오를지 내릴지는 모델이 모릅니다</b> — 위로 튈 후보이자 아래로 무너질 후보라서, 들고 있는 종목이 목록에 있으면 손절선을 다시 보고, 단타 대상을 고를 때 관심 목록으로 쓰는 용도예요.</p>
       <p><b>언제.</b> 전날 21시 목록은 21시 전에 끝난 1시간봉까지만, 새벽 6시 목록은 06시 전까지만 써서 만들어요. 진입 기준 가격은 목록을 만든 직후 첫 1시간봉 시가.</p>
       <p><b>재료.</b> 업비트 1시간봉으로 계산한 19가지 (최근 수익률, 거래대금이 평소의 몇 배인지, 변동성이 커지는 중인지, 24시간 고저폭, 거래 없는 시간, 20일 고점·저점까지 거리). 모델은 vol_lab 연구의 M1 (로지스틱 회귀). 대상은 30일 평균 거래대금 3억 원 이상, 상장 30일 이상 종목.</p>

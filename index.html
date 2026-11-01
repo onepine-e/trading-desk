@@ -150,7 +150,7 @@ canvas{max-width:100%}
 .pnav{position:sticky;top:0;z-index:30;display:flex;gap:4px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:4px;box-shadow:0 2px 10px rgba(0,0,0,.06)}
 .pnav button{flex:1;max-width:170px;border:0;background:none;padding:9px 6px;border-radius:6px;font-weight:500;cursor:pointer;color:var(--mute);display:flex;gap:6px;align-items:center;justify-content:center}
 .pnav button.on{background:var(--accbg);color:var(--accent)}
-.pnav .badge{font-size:11px;background:var(--up);color:#fff;border-radius:8px;padding:0 6px;font-family:var(--num)}
+.pnav button{white-space:nowrap}.md li.sum{list-style:none;margin-left:-18px;margin-top:6px;padding:6px 10px;border-radius:6px;background:var(--accbg)}.md li.sum::before{content:'→ ';color:var(--accent);font-weight:600}.pnav .badge{font-size:11px;background:var(--up);color:#fff;border-radius:8px;padding:0 6px;font-family:var(--num)}
 .page{display:flex;flex-direction:column;gap:8px}.page[hidden]{display:none}
 .pg{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px;min-width:0}
 .pg h2.pt{font-size:16px;margin:0 0 10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}.pg h2.pt small{font-weight:400;color:var(--mute);font-size:12px}
@@ -169,7 +169,7 @@ canvas{max-width:100%}
 .hero.m-up{border-left-color:var(--up)}.hero.m-dn{border-left-color:var(--dn)}
 .hero h2{margin:0;font-size:19px;line-height:1.35;text-wrap:balance}.hero ul{margin:0;padding-left:18px;line-height:1.6}
 .hero .hrow{display:grid;grid-template-columns:84px minmax(0,1fr);gap:4px 10px;font-size:13px;align-items:baseline}.hero .hrow>span:nth-child(odd){color:var(--mute);font-size:12px}
-details.sec{border-top:1px solid var(--line);padding:10px 2px}details.sec>summary{font-weight:600;cursor:pointer;font-size:15px;list-style-position:outside}details.sec .md{margin-top:6px}
+details.sec{border-top:1px solid var(--line);padding:10px 2px}details.sec>summary{font-weight:600;cursor:pointer;font-size:15px;list-style-position:outside}details.sec .md{margin-top:6px}details.sec.in{border-top:0;padding:8px 12px}details.sec.in>summary{list-style-position:inside;font-size:13px;font-weight:500;color:var(--mute)}
 .cmp td b{font-weight:600}
 #perfChart{height:300px;margin-top:8px}
 .scrbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}.scrbar select{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:5px 8px}.scrbar .seg button:disabled{opacity:.4;cursor:default}
@@ -195,7 +195,7 @@ details.sec{border-top:1px solid var(--line);padding:10px 2px}details.sec>summar
   #chips .chip [data-px],#chips .chip [data-chg]{text-align:center}
   #chips .chip b{font-size:14px}#chips .chip .num{font-size:11px;line-height:1.25;max-width:100%;overflow:hidden;text-overflow:ellipsis}
 }
-@media (max-width:760px){.mk{grid-template-columns:1fr}.blist2{flex-direction:row;overflow-x:auto;max-height:none}.blist2 button{min-width:200px}.pnav button{font-size:13px}.main{grid-template-columns:1fr}#tvwrap{height:440px}.brief{grid-template-columns:1fr}.hide-s{display:none}}
+@media (max-width:760px){.pnav{gap:2px}.pnav button{padding:9px 2px;gap:3px}.pnav .badge{padding:0 4px;font-size:10px}#slMode button{padding:4px 7px}.mk{grid-template-columns:1fr}.blist2{flex-direction:row;overflow-x:auto;max-height:none}.blist2 button{min-width:200px}.pnav button{font-size:13px}.main{grid-template-columns:1fr}#tvwrap{height:440px}.brief{grid-template-columns:1fr}.hide-s{display:none}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -222,7 +222,7 @@ details.sec{border-top:1px solid var(--line);padding:10px 2px}details.sec>summar
 
   <div class="page" id="pg-trade">
   <div class="bar" id="symBar" style="padding:6px 8px">
-    <div class="seg" id="mktSeg"><button data-mkt="spot" class="on">현물 USDT · 바이낸스</button><button data-mkt="fut">선물 USDT · 바이낸스</button></div>
+    <div class="seg" id="mktSeg"><button data-mkt="spot" class="on">현물</button><button data-mkt="fut">선물 (무기한)</button></div>
     <div class="chips grow" id="chips"></div>
   </div>
 
@@ -253,7 +253,7 @@ details.sec{border-top:1px solid var(--line);padding:10px 2px}details.sec>summar
 <div class="toast" id="toast"></div>
 <div id="modalRoot"></div>
 <script src="vendor/lightweight-charts-5.1.0.js"></script><!-- 외부 CDN 대신 이 저장소에 둔 사본 (변조 위험 줄이기) · 트레이딩뷰 tv.js 는 그 보기를 고를 때만 불러옴 -->
-<script src="engine.js?v=202611011000b"></script>
-<script src="app.js?v=202611011000b"></script><!-- ?v= 는 배포할 때마다 바꿔서 브라우저가 예전 파일을 쓰지 않게 -->
+<script src="engine.js?v=202611011004b"></script>
+<script src="app.js?v=202611011004b"></script><!-- ?v= 는 배포할 때마다 바꿔서 브라우저가 예전 파일을 쓰지 않게 -->
 </body>
 </html>
