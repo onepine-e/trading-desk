@@ -642,9 +642,36 @@ function indCfg() {
 // ───────────────────────────── 차트 위 도구 막대
 const ICON = {
   ind: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M1 13l4-5 3 3 6-8"/></svg>',
-  fit: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4"/></svg>',
+  fit: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M1.5 8h13M4.5 5l-3 3 3 3M11.5 5l3 3-3 3"/></svg>',
+  max: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4"/></svg>',
+  min: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4"/></svg>',
   shot: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1.5" y="4" width="13" height="9.5" rx="1.5"/><circle cx="8" cy="8.8" r="2.6"/><path d="M5.5 4l1-2h3l1 2"/></svg>',
 };
+// ───────────────────────────── 차트 크기: 아래 손잡이를 끌어 높이 조절 (PC·폰 따로 저장) · '크게 보기' = 화면 가득
+let chartMax = false;
+const maxBtn = () => `<div class="seg maxseg"><button id="maxBtn" class="${chartMax ? 'on' : ''}" title="${chartMax ? '원래 크기 (Esc)' : '크게 보기'}">${chartMax ? ICON.min : ICON.max}</button></div>`;
+const chartHKey = () => isPhone() ? 'chartHph' : 'chartHpc';
+const chartHDef = () => isPhone() ? Math.round(Math.min(760, Math.max(520, innerHeight * 0.78))) : 600;
+function applyChartH() { const w = $('#tvwrap'); if (w) w.style.height = chartMax ? '' : `${cfg[chartHKey()] || chartHDef()}px`; }
+function setChartMax(on) {
+  chartMax = !!on; $('#tvwrap').classList.toggle('max', chartMax); document.body.classList.toggle('noscroll', chartMax);
+  applyChartH(); renderChartBar(); touchOpts(); if (mc) { drawLines(); paintLegend(null); }
+}
+function touchOpts() {      // 폰: 평소엔 위아래로 쓸면 페이지가 내려가게(차트는 좌우·두 손가락), 크게 보기에선 차트가 전부 받음
+  if (mc) mc.chart.applyOptions({ handleScroll: { vertTouchDrag: !isPhone() || chartMax } });
+}
+let _wasPhone = null;
+window.addEventListener('resize', () => { const p = isPhone(); if (p !== _wasPhone) { _wasPhone = p; applyChartH(); touchOpts(); } });
+function setupGrip() {
+  const w = $('#tvwrap'); if (!w || $('#cgrip')) return;
+  const g = document.createElement('div'); g.id = 'cgrip'; g.className = 'cgrip'; g.title = '끌어서 차트 높이 조절 · 두 번 누르면 기본 높이'; g.innerHTML = '<i></i>'; w.appendChild(g);
+  let y0 = 0, h0 = 0, on = false;
+  g.addEventListener('pointerdown', (e) => { if (chartMax) return; on = true; y0 = e.clientY; h0 = w.getBoundingClientRect().height; g.setPointerCapture(e.pointerId); e.preventDefault(); });
+  g.addEventListener('pointermove', (e) => { if (!on) return; const h = Math.round(Math.max(320, Math.min(1600, h0 + e.clientY - y0))); w.style.height = h + 'px'; });
+  const end = () => { if (!on) return; on = false; cfg[chartHKey()] = Math.round(w.getBoundingClientRect().height); saveCfg(); };
+  g.addEventListener('pointerup', end); g.addEventListener('pointercancel', end);
+  g.addEventListener('dblclick', () => { delete cfg[chartHKey()]; saveCfg(); applyChartH(); });
+}
 function renderChartBar() {
   const my = cfg.chart === 'my', I = indCfg();
   const nInd = Object.keys(OVER).filter((k) => k !== 'vol' && I[k]).length + I.subs.length;
@@ -653,8 +680,8 @@ function renderChartBar() {
     ${my ? `<div class="seg" id="ivSeg">${IVS.map(([k, v]) => `<button data-iv="${k}" class="${cfg.myIv === k ? 'on' : ''}">${v}</button>`).join('')}</div>
     <button class="btn2 tbtn" id="indBtn" aria-expanded="false">${ICON.ind} 지표${nInd ? ` <span class="cnt num">${nInd}</span>` : ''}</button>
     <div class="seg" id="drawSeg"><button data-d="h" class="drawbtn ${ui.draw === 'h' ? 'on' : ''}" title="누른 가격에 수평선">─ 수평선</button><button data-d="t" class="drawbtn ${ui.draw === 't' ? 'on' : ''}" title="두 점을 눌러 추세선 (오른쪽으로 연장)">╱ 추세선</button><button data-d="f" class="drawbtn ${ui.draw === 'f' ? 'on' : ''}" title="두 가격을 눌러 피보나치 되돌림">피보</button><button data-d="m" class="drawbtn ${ui.draw === 'm' ? 'on' : ''}" title="구간 수익률 재기 (PC 는 Shift + 끌기)">측정</button><button data-d="undo" title="마지막 선 지우기">↶</button><button data-d="clear" title="이 종목의 내 선 모두 지우기">지우기</button></div>
-    <div class="seg"><button id="logBtn" class="${cfg.myLog ? 'on' : ''}" title="로그 눈금 (큰 변동을 비율로)">로그</button><button id="fitBtn" title="전체 보기">${ICON.fit}</button><button id="shotBtn" title="차트 이미지 저장">${ICON.shot}</button></div>
-    <span class="note" id="chartNote">${tip}</span>` : '<span class="note">지표·그리기는 트레이딩뷰 안에서 · 내 진입선·내 선은 포지션 차트에서</span>'}`;
+    <div class="seg"><button id="logBtn" class="${cfg.myLog ? 'on' : ''}" title="로그 눈금 (큰 변동을 비율로)">로그</button><button id="fitBtn" title="전체 기간 맞춤">${ICON.fit}</button><button id="shotBtn" title="차트 이미지 저장">${ICON.shot}</button></div>
+    ${maxBtn()}<span class="note" id="chartNote">${tip}</span>` : maxBtn()}`;
   $$('#chartSeg button').forEach((b) => b.onclick = () => { cfg.chart = b.dataset.c; saveCfg(); mountChart(); });
   $$('#ivSeg button').forEach((b) => b.onclick = () => { cfg.myIv = b.dataset.iv; saveCfg(); mountChart(); });
   $$('#drawSeg button').forEach((b) => b.onclick = () => {
@@ -663,6 +690,7 @@ function renderChartBar() {
     if (d === 'clear') { if (list.length) { ME.draw[ui.sym] = []; save(); paintDrawings(); toast(`${ui.sym} 의 내 선을 모두 지웠어요`); } return; }
     ui.draw = ui.draw === d ? null : d; ui.drawA = null; renderChartBar();
   });
+  $('#maxBtn').onclick = () => setChartMax(!chartMax);
   if (!my) return;
   $('#indBtn').onclick = (e) => { e.stopPropagation(); toggleIndPop(); };
   $('#logBtn').onclick = () => { cfg.myLog = !cfg.myLog; saveCfg(); if (mc) mc.chart.priceScale('right').applyOptions({ mode: cfg.myLog ? 1 : 0 }); renderChartBar(); };
@@ -740,10 +768,10 @@ function mountChart(keepPop) {
     for (const v of d.levels || []) sers[0].createPriceLine({ price: v, color: cssv('--mute'), lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '' });
     mc.subs.push({ k, sers });
   });
-  const P = chart.panes(); if (P.length > 1) { P[0].setStretchFactor(Math.max(2, 4 - I.subs.length) + 1); for (let i = 1; i < P.length; i++) P[i].setStretchFactor(1); }
+  const P = chart.panes(); if (P.length > 1) { P[0].setStretchFactor(Math.max(2, 4 - I.subs.length) + 1 + (isPhone() ? 1 : 0)); for (let i = 1; i < P.length; i++) P[i].setStretchFactor(1); }
   // 맨 위 왼쪽: 봉 정보 (마우스를 올린 봉, 없으면 마지막 봉)
   const lg = document.createElement('div'); lg.className = 'clegend'; el.appendChild(lg); mc.legend = lg;
-  setupOverlay(el, chart);
+  setupOverlay(el, chart); touchOpts();
   chart.subscribeCrosshairMove((p) => paintLegend(p && p.time != null ? p.time : null));
   const onClick = (p) => {
     if (!p.point || !mc || (p.paneIndex ?? 0) > 0 || !ui.draw) return;      // 그리기 중이 아니거나 보조지표 칸이면 무시
@@ -821,6 +849,7 @@ function paintLegend(time) {
   const Bs = mc.bars, i = time == null ? Bs.length - 1 : Bs.findIndex((b) => b.t + KSTS === time);
   const b = Bs[i < 0 ? Bs.length - 1 : i], prev = Bs[Math.max(0, (i < 0 ? Bs.length - 1 : i) - 1)];
   const ch = prev ? b.c / prev.c - 1 : 0, iv = (IVS.find(([k]) => k === cfg.myIv) || [, ''])[1];
+  if (isPhone() && !chartMax) { mc.legend.innerHTML = `<b>${ui.sym}</b> <span class="mute">${iv}</span> ${fpx(b.c)} <span class="${cls(ch)}">${fpct(ch)}</span>`; return; }
   mc.legend.innerHTML = `<b>${ui.sym}</b> <span class="mute">${ui.mkt === 'fut' ? '무기한' : '현물'} · ${iv}</span> <span class="mute">시</span>${fpx(b.o)} <span class="mute">고</span>${fpx(b.h)} <span class="mute">저</span>${fpx(b.l)} <span class="mute">종</span><span class="${cls(ch)}">${fpx(b.c)} ${fpct(ch)}</span>`
     + (mc.over.length ? `<div>${mc.over.filter((o, j, a) => /^(SMA|EMA)/.test(o.label) || a.findIndex((x) => x.k === o.k) === j).map((o) => `<span style="color:${o.color}">${esc(/^(SMA|EMA)/.test(o.label) ? o.label : SHORT[o.k] || o.label)}</span>`).join(' · ')}</div>` : '');
 }
@@ -980,7 +1009,7 @@ function drawLines() {
   const t0 = mc.bars.length ? mc.bars[0].t : 0;
   const mks = st.fills.filter((f) => f.mkt === mk && f.sym === s && f.t / 1000 >= t0).map((f) => {
     const upish = ['매수', '롱 진입', '숏 청산'].includes(f.side);
-    return { time: barStart(Math.floor(f.t / 1000), cfg.myIv) + KSTS, position: upish ? 'belowBar' : 'aboveBar', color: upish ? UP : DN, shape: upish ? 'arrowUp' : 'arrowDown', text: f.side.replace(' 진입', '').replace('강제청산', '청산!') };
+    return { time: barStart(Math.floor(f.t / 1000), cfg.myIv) + KSTS, position: upish ? 'belowBar' : 'aboveBar', color: upish ? UP : DN, shape: upish ? 'arrowUp' : 'arrowDown', text: isPhone() && !chartMax ? '' : f.side.replace(' 진입', '').replace('강제청산', '청산!') };
   }).sort((a, b) => a.time - b.time);
   mc.mk.setMarkers(mks);
 }
@@ -1900,7 +1929,7 @@ function bind() {
   const closeSet = () => { $('#setDrawer').hidden = true; };
   $('#gearBtn').onclick = openSet; $('#setClose').onclick = closeSet;
   $('#setDrawer').addEventListener('pointerdown', (e) => { if (e.target.id === 'setDrawer') closeSet(); });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeSet(); toggleIndPop(false); if (mc && mc.meas) { mc.meas = null; paintOverlay(); } if (ui.draw) { ui.draw = null; ui.drawA = null; renderChartBar(); } } });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { if (chartMax) setChartMax(false); closeSet(); toggleIndPop(false); if (mc && mc.meas) { mc.meas = null; paintOverlay(); } if (ui.draw) { ui.draw = null; ui.drawA = null; renderChartBar(); } } });
   if (!ghOn()) setTimeout(() => toast('기록을 기기 사이에 맞추려면 오른쪽 위 ⚙ 설정에서 GitHub 를 연결하세요', 7000), 1500);
   $$('#pnav button').forEach((b) => b.onclick = () => { const p = b.dataset.page; if (p === ui.page) return; history.pushState(null, '', p === 'trade' ? location.pathname + location.search : '#' + p); setPage(p); });
   window.addEventListener('popstate', () => setPage(location.hash.slice(1) || 'trade'));
@@ -1908,7 +1937,7 @@ function bind() {
   setInterval(() => { if (document.visibilityState === 'visible') pullRemote(true); }, 20000);
 }
 async function start() {
-  applyTheme(); bind(); renderAll(); mountChart(); setPage(location.hash.slice(1) || 'trade');
+  applyTheme(); bind(); renderAll(); applyChartH(); setupGrip(); mountChart(); setPage(location.hash.slice(1) || 'trade');
   setSync(ghOn() ? 'wait' : '', ghOn() ? '저장소 확인 중' : '이 기기에만 저장 (⚙ 설정에서 GitHub 연결)');
   spotWS(); binanceWS();
   pollFut(); pollFutTicker(); setInterval(pollFut, 2000); setInterval(pollFutTicker, 20000); setInterval(pollSpot, 3000);
