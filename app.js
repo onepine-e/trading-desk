@@ -38,6 +38,7 @@ let ME_SHA = LS.get('desk.me.sha', null);
 let CL = null, BRIEFS = [], BRIEF_TXT = {}, BOT = null, MKT = null, REVIEWS = [], REV_TXT = {}, SCR = null, SCR_DAY = {};
 // 저장소 기록(봇·시황·Claude·스크리너)은 지난번 읽은 것을 이 기기에 남겨 두고 먼저 보여줌 → 새로 읽으면 바꿔 그림
 let SHARED = { live: false, t: 0 };
+let BANDS = null, LAB = null;                                 // 정상 범위(bands.json) · 검증 지도(research.json) — 이 저장소의 고정 파일
 (() => { const c = LS.get('desk.shared', null); if (!c || c.v !== 1) return;
   ({ CL = null, BRIEFS = [], BOT = null, MKT = null, REVIEWS = [], SCR = null } = c); SHARED.t = c.t || 0; })();
 const ui = { acct: 'me', mkt: 'spot', sym: 'BTC', tab: 'pos', side: 'buy', otype: 'market', lev: 10, statMkt: 'fut', brief: null, page: 'trade', rev: null, draw: null, drawA: null };
@@ -264,7 +265,7 @@ async function loadBot() {
   const out = { rows: [], rec: [], missing: [] };
   const parse = (txt) => { const L = txt.replace(/^\uFEFF/, '').trim().split(/\r?\n/); const h = L[0].split(','); return L.slice(1).map((l) => { const v = l.split(','); return Object.fromEntries(h.map((k, i) => [k, v[i]])); }); };
   // 필요한 파일을 한꺼번에 요청 (없는 파일 = 404 → null). 404 가 아닌 실패가 있으면 통째로 실패 처리 → 이전 기록 유지
-  const files = [...BOT_ORDER.flatMap((a) => [`paper/${a}/equity.csv`, `paper/${a}/trades.csv`]), 'paper/H/equity.csv', 'paper/H/trades.csv', 'paper/reconcile.csv'];
+  const files = [...BOT_ORDER.flatMap((a) => [`paper/${a}/equity.csv`, `paper/${a}/trades.csv`]), 'paper/H/equity.csv', 'paper/H/trades.csv', 'paper/reconcile.csv', 'paper/watch.json'];
   let err = null;
   const got = await Promise.all(files.map((p) => ghText(p).catch((e) => { err = e; return null; })));
   if (err) throw err;
@@ -291,6 +292,7 @@ async function loadBot() {
     const rr = parse(rec).map((r) => ({ ...r, acct: legacy ? ({ H: 'BH', F: 'BF' }[r.acct] || r.acct) : r.acct }));
     const lastT = rr.length ? rr[rr.length - 1].time_kst : null; out.rec = rr.filter((r) => r.time_kst === lastT);
   }
+  try { out.watch = T['paper/watch.json'] ? JSON.parse(T['paper/watch.json']) : null; } catch { out.watch = null; }
   return out;
 }
 
@@ -1443,13 +1445,55 @@ function tabBot(body) {
   if (!BOT) { body.innerHTML = `<div class="empty">${SHARED.live ? '봇 기록을 읽지 못했어요 — 5분 뒤 다시 시도해요.' : '봇 기록 불러오는 중…'}</div>`; return; }
   if (!BOT.rows.length) { body.innerHTML = '<div class="empty">봇 기록을 찾지 못했어요 (paper/*/equity.csv).</div>'; return; }
   const rec = Object.fromEntries((BOT.rec || []).map((r) => [r.acct, r]));
-  body.innerHTML = `<table class="t"><thead><tr><th class="l">계좌</th><th>평가액 (원)</th><th>수익률</th><th>제때 실행했다면</th><th>놓친 거래</th><th class="l">보유</th><th>추이</th></tr></thead><tbody>${BOT.rows.map((r) => {
+  body.innerHTML = `<table class="t"><thead><tr><th class="l">계좌</th><th>평가액 (원)</th><th>수익률</th><th>제때 실행했다면</th><th>놓친 거래</th><th class="l">보유</th><th>추이</th><th class="l" title="과거 같은 날수 동안의 수익률 범위 (2019~, 봇 규칙 그대로 계산)">정상 범위</th></tr></thead><tbody>${BOT.rows.map((r) => {
     const x = r.last, c = rec[r.a], dip = BOT_DIP.has(r.a);
     return `<tr${BOT_BENCH.has(r.a) ? ' class="mute"' : ''}><td class="l"><b class="ba">${r.a}</b>${botLabel(r.a)}</td><td class="num">${fkrw(+x.equity)}</td><td class="num ${cls(+x.ret)}">${fpct(+x.ret)}</td>
-      <td class="num ${c ? cls(+c.ontime_ret) : ''}">${dip ? '<span class="mute" title="처음부터 제때 했다면 방식으로 계산">= 같음</span>' : c ? fpct(+c.ontime_ret) : '–'}</td><td class="num">${dip ? '–' : c ? c.ontime_only : '–'}</td><td class="l">${holdTxt(x.holdings)}</td><td>${spark(r.hist)}</td></tr>`;
-  }).join('')}${(BOT.missing || []).filter((a) => !BOT_BENCH.has(a)).map((a) => `<tr class="mute"><td class="l"><b class="ba">${a}</b>${botLabel(a)}</td><td colspan="6" class="l">첫 실행 대기 — 다음 4시간 확인(01·05·09·13·17·21시 2분) 때 기록 시작</td></tr>`).join('')}</tbody></table><details class="sec in"><summary>규칙</summary><p class="note">'제때 실행했다면' = 하루 한 번 대조 실행이 놓친 매수·늦은 매도를 다음 봉 시가로 반영한 값.
+      <td class="num ${c ? cls(+c.ontime_ret) : ''}">${dip ? '<span class="mute" title="처음부터 제때 했다면 방식으로 계산">= 같음</span>' : c ? fpct(+c.ontime_ret) : '–'}</td><td class="num">${dip ? '–' : c ? c.ontime_only : '–'}</td><td class="l">${holdTxt(x.holdings)}</td><td>${spark(r.hist)}</td><td class="l">${bandCell(r)}</td></tr>`;
+  }).join('')}${(BOT.missing || []).filter((a) => !BOT_BENCH.has(a)).map((a) => `<tr class="mute"><td class="l"><b class="ba">${a}</b>${botLabel(a)}</td><td colspan="7" class="l">첫 실행 대기 — 다음 4시간 확인(01·05·09·13·17·21시 2분) 때 기록 시작</td></tr>`).join('')}</tbody></table><details class="sec in"><summary>규칙</summary><p class="note">'제때 실행했다면' = 하루 한 번 대조 실행이 놓친 매수·늦은 매도를 다음 봉 시가로 반영한 값.
     <span class="tag mdl m-dip">급락</span> E·F 는 1시간 −2% 급락 중 BTC·코인 50일선 위 · 공포탐욕 ≥ 50 · 펀딩 3일 ≥ 0.01% 인 것만 −1% 지정가(12시간) → 24시간 보유. 4시간마다 확인할 때 직전 1시간봉·5분봉으로 그 시각에 했던 것처럼 계산 (처음부터 제때 방식). F 의 TSB7 은 A 와 같은 규칙.
-    <span class="tag mdl m-bench">기준</span> BH·BF 는 비교용 기준선 (예전 H·F).</p></details>`;
+    <span class="tag mdl m-bench">기준</span> BH·BF 는 비교용 기준선 (예전 H·F).</p>
+    <p class="note"><b>정상 범위</b> = 2019년부터 아무 날에 시작했다고 치고, 지금과 같은 날수가 지났을 때의 수익률. 옅은 띠 = 가운데 80%, 진한 띠 = 가운데 50%, 점 = 지금. 띠 밖이면 '평소와 다름'. F 는 A 범위로 대신하고 E 는 계산하지 않음.</p>
+    <p class="note"><b>TSB7 대기</b> = 다음 4시간봉이 20일 고점 위에서 마감하고 그 봉 거래대금이 20일 평균의 1.5배를 넘으면 매수. 막대는 가까울수록 차요. BTC 필터가 꺼져 있으면 돌파해도 사지 않아요.</p></details>${waitBoard(BOT.watch)}`;
+}
+function bandCell(r) {
+  if (!BANDS || !r.pts?.length) return '<span class="mute">–</span>';
+  const key = BANDS.acct[r.a] ? r.a : BANDS.alias?.[r.a];
+  const Q = key && BANDS.acct[key];
+  if (!Q) return '<span class="mute">–</span>';
+  const days = Math.max(1, Math.min(Q.length, Math.round((Date.now() - r.pts[0].t) / 864e5)));
+  const [p10, p25, , p75, p90] = Q[days - 1], cur = +r.last.ret;
+  if (!isFinite(cur)) return '<span class="mute">–</span>';
+  const lo = Math.min(p10, cur, 0), hi = Math.max(p90, cur, 0), pad = (hi - lo) * 0.12 || 0.01;
+  const W = 96, H = 14, X = (v) => ((v - lo + pad) / (hi - lo + 2 * pad) * W).toFixed(1);
+  const st = cur < p10 ? ['dn', '나쁨'] : cur > p90 ? ['up', '좋음'] : ['mute', '보통'];
+  const tip = `${days}일째 · 과거 같은 기간 80%가 ${fpct(p10, 1)} ~ ${fpct(p90, 1)} (가운데 50% ${fpct(p25, 1)} ~ ${fpct(p75, 1)})`;
+  return `<span class="band" title="${tip}"><svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" aria-label="${tip}"><rect x="${X(p10)}" y="4" width="${Math.max(1, X(p90) - X(p10))}" height="6" rx="3" fill="var(--line)"/><rect x="${X(p25)}" y="4" width="${Math.max(1, X(p75) - X(p25))}" height="6" rx="3" fill="var(--mute)" opacity=".45"/><line x1="${X(0)}" x2="${X(0)}" y1="1" y2="13" stroke="var(--mute)" stroke-width="1" opacity=".6"/><circle cx="${X(cur)}" cy="7" r="3.5" fill="var(--${st[0] === 'mute' ? 'fg' : st[0]})"/></svg><span class="${st[0]}">${st[1]}</span></span>`;
+}
+function waitBoard(W) {
+  if (!W || !W.btc || !W.coins?.length) return '';
+  const b = W.btc, days = b.since ? Math.floor((W.t - b.since) / 864e11) + 1 : null;
+  const need = -b.gap / (1 + b.gap);
+  const pos = Math.max(-0.1, Math.min(0.1, b.gap)), gx = ((pos + 0.1) / 0.2 * 100).toFixed(1);
+  const hold = W.hold || [], held = Object.fromEntries(hold.filter((h) => h.strat === 'TSB7').map((h) => [h.coin, h]));
+  const rows = W.coins.filter((c) => c.ready !== false).slice().sort((a, c) => (held[c.coin] ? 1 : 0) - (held[a.coin] ? 1 : 0) || a.gap - c.gap);
+  const row = (c) => {
+    const h = held[c.coin];
+    const near = c.gap <= 0.02, fill = Math.max(0.03, 1 - Math.min(Math.max(c.gap, 0), 0.15) / 0.15);
+    const dist = c.gap <= 0 ? '<span class="tag sm up">위</span>' : `<span class="num${near ? ' acc' : ''}">${fpct(c.gap, 1)}</span>`;
+    const vr = c.vr == null ? '–' : `<span class="num ${c.vr >= 1.5 ? 'up' : 'mute'}">${c.vr.toFixed(1)}배</span>`;
+    const sub = h ? `<div class="wsub"><span class="tag sm acc">${h.accts.join('·')} 보유</span><span class="num ${cls(h.ret)}">${fpct(h.ret, 1)}</span><span class="mute">청산선 <span class="num">${fpct(c.exit_gap, 1)}</span></span>${h.left_days != null ? `<span class="mute"><span class="num">${h.left_days.toFixed(1)}</span>일 남음</span>` : ''}</div>` : '';
+    return `<div class="wrow${h ? ' held' : ''}"><b>${esc(c.coin)}</b><div class="wtrack" title="20일 고점 ${fpx(c.line)} · 지금 ${fpx(c.px)}"><i style="width:${(fill * 100).toFixed(0)}%"${near ? ' class="near"' : ''}></i></div>${dist}${vr}${sub}</div>`;
+  };
+  const dips = hold.filter((h) => h.strat === '급락');
+  return `<section class="wait${b.on ? '' : ' off'}">
+    <h3>TSB7 대기 <small class="mute">${esc(String(W.bar || '').replace(/^\d{4}-/, ''))} 봉</small></h3>
+    <div class="wbtc"><b>BTC 50일선</b><span class="tag sm ${b.on ? 'up' : 'dn'}">${b.on ? '켜짐' : '꺼짐'}</span>${days ? `<span class="mute">${days}일째</span>` : ''}
+      <div class="wg" title="50일선 ${fpx(b.ma)} · BTC ${fpx(b.px)}"><span class="wg0"></span><i style="left:${gx}%" class="${b.on ? 'up' : 'dn'}"></i></div>
+      <span class="num ${b.on ? 'up' : 'mute'}">${b.on ? `위 ${fpct(b.gap, 1)}` : `${fpct(need, 1)} 오르면 켜짐`}</span></div>
+    <div class="whead"><span></span><span>20일 고점까지</span><span>거래대금</span></div>
+    <div class="wlist">${rows.map(row).join('')}</div>
+    ${dips.length ? `<div class="wsub" style="margin-top:6px"><span class="tag mdl m-dip">급락</span>${dips.map((h) => `<span>${esc(h.coin)} <span class="num ${cls(h.ret)}">${fpct(h.ret, 1)}</span> <span class="mute">${h.accts.join('·')}</span></span>`).join('')}</div>` : ''}
+  </section>`;
 }
 function botStamp() {      // 모든 계좌가 같은 시각에 함께 갱신되므로 표 대신 제목 옆에 한 번만
   const x = BOT?.rows?.[0]?.last; if (!x) return '';
@@ -1545,7 +1589,7 @@ function tabSet(body) {
 }
 
 // ───────────────────────────── 페이지 (거래 · 시황 · 성과 · 봇 · 스크리너) — 위쪽 탭으로 넘김, 주소 #mkt 처럼 남아서 새로고침해도 그 페이지
-const PAGES = ['trade', 'mkt', 'perf', 'bot', 'scr'];
+const PAGES = ['trade', 'mkt', 'perf', 'bot', 'scr', 'lab'];
 function setPage(p) {
   if (!PAGES.includes(p)) p = 'trade';
   ui.page = p;
@@ -1559,13 +1603,14 @@ function setPage(p) {
 function renderNav() {
   const nb = BRIEFS.filter((x) => x.t > (cfg.seenBrief || 0)).length, nr = REVIEWS.filter((x) => x.t > (cfg.seenRev || 0)).length;
   const ns = cfg.seenScr ? (SCR?.rows || []).filter((r) => scrMade(r) > cfg.seenScr).length : 0;     // 처음엔 배지 없이
-  const lab = { trade: '거래', mkt: '시황', perf: '성과', bot: '봇', scr: '스크리너' }, cnt = { mkt: ui.page === 'mkt' ? 0 : nb, perf: ui.page === 'perf' ? 0 : nr, scr: ui.page === 'scr' ? 0 : ns };
+  const lab = { trade: '거래', mkt: '시황', perf: '성과', bot: '봇', scr: '스크리너', lab: '검증' }, cnt = { mkt: ui.page === 'mkt' ? 0 : nb, perf: ui.page === 'perf' ? 0 : nr, scr: ui.page === 'scr' ? 0 : ns };
   $$('#pnav button').forEach((b) => { const k = b.dataset.page; b.innerHTML = lab[k] + (cnt[k] ? `<span class="badge" title="새 글">${cnt[k]}</span>` : ''); });
 }
 function renderPage() {
   if (ui.page === 'mkt') pageMkt($('#pg-mkt'));
   else if (ui.page === 'perf') pagePerf($('#pg-perf'));
   else if (ui.page === 'scr') pageScr($('#pg-scr'));
+  else if (ui.page === 'lab') pageLab($('#pg-lab'));
   else if (ui.page === 'bot') { const el = $('#pg-bot'); el.innerHTML = `<div class="pg"><h2 class="pt">가상매매 봇 <small>업비트 원화 · 4시간봉 마감마다${botStamp()}${SHARED.live ? '' : SHARED.t ? ` · <span class="acc">${ftime(SHARED.t)} 에 읽은 기록 — 새로 읽는 중…</span>` : ''}</small></h2><div class="tbody" style="padding:0" id="botBody"></div></div>`; tabBot($('#botBody')); }
 }
 const needGH = (el, what) => { el.innerHTML = `<div class="pg"><div class="empty">${what}은(는) GitHub 저장소에서 읽어요. 오른쪽 위 ⚙ 설정에서 GitHub 를 연결해 주세요.</div></div>`; };
@@ -1936,12 +1981,40 @@ function bind() {
   document.addEventListener('visibilitychange', async () => { if (document.visibilityState === 'visible') { await pullRemote(true); if (caughtUp) { caughtUp = false; catchUpAll(); } } });
   setInterval(() => { if (document.visibilityState === 'visible') pullRemote(true); }, 20000);
 }
+async function loadStatic() {     // 이 저장소(공개)에 같이 올린 고정 파일 — GitHub 연결 없이도 읽힘
+  const get = (f) => fetch(f, { cache: 'no-cache' }).then((r) => r.ok ? r.json() : null).catch(() => null);
+  const [b, l] = await Promise.all([get('bands.json'), get('research.json')]);
+  if (b) BANDS = b;
+  if (l) LAB = l;
+  if (ui.page === 'bot' || ui.page === 'lab') renderPage();
+}
+const LAB_ORDER = ['run', 'keep', 'hold', 'no'];
+function pageLab(el) {
+  if (!LAB) { el.innerHTML = '<div class="pg"><div class="empty">불러오는 중…</div></div>'; return; }
+  const q = (ui.labQ || '').trim().toLowerCase(), f = ui.labV || 'all';
+  const hit = (x) => !q || [x.name, x.why, x.cat].some((t) => String(t).toLowerCase().includes(q));
+  const items = LAB.items.filter(hit);
+  const cnt = (v) => items.filter((x) => x.v === v).length;
+  const seg = [['all', '전체', items.length], ...LAB_ORDER.map((v) => [v, LAB.verdicts[v], cnt(v)])]
+    .map(([k, t, n]) => `<button data-labv="${k}" class="${f === k ? 'on' : ''}">${t} <span class="num mute">${n}</span></button>`).join('');
+  const sec = (v) => {
+    const xs = items.filter((x) => x.v === v);
+    if (!xs.length || (f !== 'all' && f !== v)) return '';
+    return `<section class="labsec lv-${v}"><h3>${LAB.verdicts[v]}</h3><ul>${xs.map((x) => `<li><span class="tag sm">${esc(x.cat)}</span><div><b>${esc(x.name)}</b><p>${esc(x.why)}</p></div><time class="num mute">${esc(String(x.date).slice(5))}</time></li>`).join('')}</ul></section>`;
+  };
+  el.innerHTML = `<div class="pg"><h2 class="pt">검증 지도 <small>${LAB.items.length}개 · ${esc(LAB.updated)}</small></h2>
+    <div class="labbar"><input id="labQ" type="search" placeholder="찾기 — 예: 엘리어트, RSI, 숏" value="${esc(ui.labQ || '')}"><div class="seg">${seg}</div></div>
+    ${LAB_ORDER.map(sec).join('') || '<div class="empty">맞는 항목이 없어요.</div>'}</div>`;
+  const inp = $('#labQ');
+  inp.oninput = () => { ui.labQ = inp.value; const p = inp.selectionStart; pageLab(el); const n = $('#labQ'); n.focus(); n.setSelectionRange(p, p); };
+  $$('[data-labv]', el).forEach((b) => b.onclick = () => { ui.labV = b.dataset.labv; pageLab(el); });
+}
 async function start() {
   applyTheme(); bind(); renderAll(); applyChartH(); setupGrip(); mountChart(); setPage(location.hash.slice(1) || 'trade');
   setSync(ghOn() ? 'wait' : '', ghOn() ? '저장소 확인 중' : '이 기기에만 저장 (⚙ 설정에서 GitHub 연결)');
   spotWS(); binanceWS();
   pollFut(); pollFutTicker(); setInterval(pollFut, 2000); setInterval(pollFutTicker, 20000); setInterval(pollSpot, 3000);
-  loadShared(); loadBtcFilter();                             // 봇·시황 기록은 기다리지 않고 바로 (아래 내 계좌 맞추기와 동시에)
+  loadStatic(); loadShared(); loadBtcFilter();                // 봇·시황 기록은 기다리지 않고 바로 (아래 내 계좌 맞추기와 동시에)
   if (migratedNote) toast('현물 계좌를 바이낸스 USDT 기준(1만 USDT)으로 새로 시작했어요. 선물 기록은 그대로예요.', 9000);
   await pullRemote();
   renderAll();

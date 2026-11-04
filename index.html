@@ -198,6 +198,29 @@ details.sec{border-top:1px solid var(--line);padding:10px 2px}details.sec>summar
   #chips .chip b{font-size:14px}#chips .chip .num{font-size:11px;line-height:1.25;max-width:100%;overflow:hidden;text-overflow:ellipsis}
 }
 @media (max-width:760px){.pnav{gap:2px}.pnav button{padding:9px 2px;gap:3px}.pnav .badge{padding:0 4px;font-size:10px}#slMode button{padding:4px 7px}.mk{grid-template-columns:1fr}.blist2{flex-direction:row;overflow-x:auto;max-height:none}.blist2 button{min-width:200px}.pnav button{font-size:13px}.main{grid-template-columns:1fr}.brief{grid-template-columns:1fr}.hide-s{display:none}}
+/* 봇: 정상 범위 · TSB7 대기 */
+.band{display:inline-flex;align-items:center;gap:6px;font-size:12px}.band svg{display:block}
+.wait{margin-top:14px;border-top:1px solid var(--line);padding:12px 12px 4px}.wait>*{max-width:760px}.wait h3{margin:0 0 10px;font-size:14px;display:flex;gap:8px;align-items:baseline}.wait h3 small{font-weight:400;font-size:12px}
+.wbtc{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;background:var(--panel2);border-radius:8px;padding:9px 12px;margin-bottom:10px}.wbtc .tag{margin:0}
+.wg{position:relative;flex:1 1 140px;max-width:260px;height:6px;border-radius:3px;background:linear-gradient(90deg,var(--dnbg),var(--line) 50%,var(--upbg))}.wg .wg0{position:absolute;left:50%;top:-4px;bottom:-4px;width:1px;background:var(--mute)}.wg i{position:absolute;top:-3px;width:12px;height:12px;margin-left:-6px;border-radius:50%;border:2px solid var(--panel)}.wg i.up{background:var(--up)}.wg i.dn{background:var(--dn)}
+.whead,.wrow{display:grid;grid-template-columns:52px minmax(80px,1fr) 64px 54px;gap:4px 12px;align-items:center}
+.whead{font-size:11px;color:var(--mute);padding:0 4px 4px}.whead span:nth-child(2){grid-column:2/4}.whead span:nth-child(3){text-align:right}
+.wrow{padding:7px 4px;border-top:1px solid var(--line)}.wrow>.num,.wrow>.tag,.wrow>span{text-align:right;justify-self:end}
+.wtrack{height:6px;border-radius:3px;background:var(--panel2);overflow:hidden}.wtrack i{display:block;height:100%;background:var(--mute);opacity:.55;border-radius:3px}.wtrack i.near{background:var(--accent);opacity:1}
+.wrow.held{background:var(--accbg);border-radius:6px}
+.wsub{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:4px 10px;font-size:12px;align-items:center}.wsub .tag{margin:0}
+.wait.off .wlist{opacity:.55}
+/* 검증 지도 */
+.labbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:6px}.labbar input{flex:1 1 220px;max-width:340px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:7px 10px;outline:none}.labbar input:focus{border-color:var(--accent)}
+.labbar .seg{flex-wrap:wrap}.labbar .seg .num{font-size:11px;margin-left:2px}
+.labsec{margin-top:14px;max-width:920px}.labsec h3{font-size:13px;margin:0 0 4px;padding-left:9px;border-left:3px solid var(--mute)}
+.labsec.lv-run h3{border-color:var(--accent);color:var(--accent)}.labsec.lv-keep h3{border-color:var(--ok);color:var(--ok)}.labsec.lv-hold h3{border-color:var(--warn);color:var(--warn)}.labsec.lv-no h3{color:var(--mute)}
+.labsec ul{list-style:none;margin:0;padding:0}
+.labsec li{display:grid;grid-template-columns:64px minmax(0,1fr) auto;gap:10px;align-items:start;padding:9px 4px;border-bottom:1px solid var(--line)}
+.labsec li .tag{margin:1px 0 0;justify-self:start}.labsec li b{font-weight:500}.labsec li p{margin:2px 0 0;font-size:12.5px;color:var(--mute);line-height:1.5}.labsec li time{font-size:11px;padding-top:2px}
+.labsec.lv-no li b{font-weight:400}
+@media (max-width:760px){.labsec li{grid-template-columns:minmax(0,1fr) auto}.labsec li .tag{grid-column:1/-1;grid-row:1}.labsec li time{grid-row:2;grid-column:2}
+  .whead,.wrow{grid-template-columns:44px minmax(50px,1fr) 56px 46px;gap:4px 8px}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -219,7 +242,7 @@ details.sec{border-top:1px solid var(--line);padding:10px 2px}details.sec>summar
   </div>
 
   <nav class="pnav" id="pnav" aria-label="페이지">
-    <button data-page="trade" class="on">거래</button><button data-page="mkt">시황</button><button data-page="perf">성과</button><button data-page="bot">봇</button><button data-page="scr">스크리너</button>
+    <button data-page="trade" class="on">거래</button><button data-page="mkt">시황</button><button data-page="perf">성과</button><button data-page="bot">봇</button><button data-page="scr">스크리너</button><button data-page="lab">검증</button>
   </nav>
 
   <div class="page" id="pg-trade">
@@ -250,12 +273,13 @@ details.sec{border-top:1px solid var(--line);padding:10px 2px}details.sec>summar
   <div class="page" id="pg-perf" hidden></div>
   <div class="page" id="pg-bot" hidden></div>
   <div class="page" id="pg-scr" hidden></div>
+  <div class="page" id="pg-lab" hidden></div>
 </div>
 <div class="drawer" id="setDrawer" hidden><div class="dpanel" role="dialog" aria-label="설정"><div class="dhead"><b>설정</b><button class="btn2" id="setClose">닫기</button></div><div id="setBody" class="tbody"></div></div></div>
 <div class="toast" id="toast"></div>
 <div id="modalRoot"></div>
 <script src="vendor/lightweight-charts-5.1.0.js"></script><!-- 외부 CDN 대신 이 저장소에 둔 사본 (변조 위험 줄이기) · 트레이딩뷰 tv.js 는 그 보기를 고를 때만 불러옴 -->
-<script src="engine.js?v=202611021048b"></script>
-<script src="app.js?v=202611021048b"></script><!-- ?v= 는 배포할 때마다 바꿔서 브라우저가 예전 파일을 쓰지 않게 -->
+<script src="engine.js?v=202611042130"></script>
+<script src="app.js?v=202611042130"></script><!-- ?v= 는 배포할 때마다 바꿔서 브라우저가 예전 파일을 쓰지 않게 -->
 </body>
 </html>
