@@ -251,14 +251,14 @@ async function loadShared() {
   if (ui.page !== 'trade' && sig !== ui.sig) renderPage();       // 바뀐 게 있을 때만 다시 그림 (읽던 위치 유지)
   ui.sig = sig;
 }
-// 봇 계좌: A~D (TSB7 계열) · E·F (급락 매수, 제때 했다면 방식) · BH·BF (기준선). v5.1 전에는 기준선이 H·F 폴더 → 이름이 바뀌기 전 기록도 읽음
-const BOT_ORDER = ['A', 'B', 'C', 'D', 'E', 'F', 'BH', 'BF'];
-const BOT_NAME = { A: 'TSB7 1/6 (현행)', B: 'TSB7 1/5 + 노출 상한 80%', C: 'TSB7 1/4', D: 'TSB7 + BB20 1/8', E: '급락 매수 1/8 (단독)', F: 'TSB7 + 급락 매수 1/16', BH: 'BTC 보유', BF: 'BTC 50일선 필터' };
-const BOT_BENCH = new Set(['BH', 'BF']), BOT_DIP = new Set(['E', 'F']);
+// 봇 계좌: A~D (TSB7 계열) · E·F (급락 매수, 제때 했다면 방식) · G (4시간봉 저점 반등, 제때 방식) · BH·BF (기준선). v5.1 전에는 기준선이 H·F 폴더 → 이름이 바뀌기 전 기록도 읽음
+const BOT_ORDER = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'BH', 'BF'];
+const BOT_NAME = { A: 'TSB7 1/6 (현행)', B: 'TSB7 1/5 + 노출 상한 80%', C: 'TSB7 1/4', D: 'TSB7 + BB20 1/8', E: '급락 매수 1/8 (단독)', F: 'TSB7 + 급락 매수 1/16', G: '저점 반등 4h 1/8 · 3일 보유', BH: 'BTC 보유', BF: 'BTC 50일선 필터' };
+const BOT_BENCH = new Set(['BH', 'BF']), BOT_DIP = new Set(['E', 'F', 'G']);     // BOT_DIP = 처음부터 '제때 했다면' 방식
 // 계좌마다 바탕 전략을 타원 표시로 (시황 목록의 '10-30 아침' 처럼) + 나머지 설명
-const BOT_MODEL = { A: ['tsb7'], B: ['tsb7'], C: ['tsb7'], D: ['tsb7', 'bb'], E: ['dip'], F: ['tsb7', 'dip'], BH: ['bench'], BF: ['bench'] };
-const BOT_SHORT = { A: '1/6 (현행)', B: '1/5 · 노출 상한 80%', C: '1/4', D: '각 1/8', E: '1/8 단독', F: 'TSB7 1/6 · 급락 1/16', BH: 'BTC 보유', BF: 'BTC 50일선 필터' };
-const MODEL_TAG = { tsb7: ['TSB7', 'TSB7 추세 (4시간봉)'], dip: ['급락', '급락 매수 · 제때 했다면 방식'], bb: ['BB20', '볼린저 20 추가 전략'], bench: ['기준', '비교용 기준선'] };
+const BOT_MODEL = { A: ['tsb7'], B: ['tsb7'], C: ['tsb7'], D: ['tsb7', 'bb'], E: ['dip'], F: ['tsb7', 'dip'], G: ['low'], BH: ['bench'], BF: ['bench'] };
+const BOT_SHORT = { A: '1/6 (현행)', B: '1/5 · 노출 상한 80%', C: '1/4', D: '각 1/8', E: '1/8 단독', F: 'TSB7 1/6 · 급락 1/16', G: '1/8 · 3일 보유', BH: 'BTC 보유', BF: 'BTC 50일선 필터' };
+const MODEL_TAG = { tsb7: ['TSB7', 'TSB7 추세 (4시간봉)'], dip: ['급락', '급락 매수 · 제때 했다면 방식'], low: ['저점', '4시간봉 저점 반등 · 그해 로지스틱 상위 2% · 3일 보유'], bb: ['BB20', '볼린저 20 추가 전략'], bench: ['기준', '비교용 기준선'] };
 const botTags = (a) => (BOT_MODEL[a] || []).map((m) => `<span class="tag mdl m-${m}" title="${MODEL_TAG[m][1]}">${MODEL_TAG[m][0]}</span>`).join('');
 const botLabel = (a) => `<span class="bl">${botTags(a)}<span class="mute">${esc(BOT_SHORT[a] || '')}</span></span>`;
 async function loadBot() {
@@ -1451,8 +1451,9 @@ function tabBot(body) {
       <td class="num ${c ? cls(+c.ontime_ret) : ''}">${dip ? '<span class="mute" title="처음부터 제때 했다면 방식으로 계산">= 같음</span>' : c ? fpct(+c.ontime_ret) : '–'}</td><td class="num">${dip ? '–' : c ? c.ontime_only : '–'}</td><td class="l">${holdTxt(x.holdings)}</td><td>${spark(r.hist)}</td><td class="l">${bandCell(r)}</td></tr>`;
   }).join('')}${(BOT.missing || []).filter((a) => !BOT_BENCH.has(a)).map((a) => `<tr class="mute"><td class="l"><b class="ba">${a}</b>${botLabel(a)}</td><td colspan="7" class="l">첫 실행 대기 — 다음 4시간 확인(01·05·09·13·17·21시 2분) 때 기록 시작</td></tr>`).join('')}</tbody></table><details class="sec in"><summary>규칙</summary><p class="note">'제때 실행했다면' = 하루 한 번 대조 실행이 놓친 매수·늦은 매도를 다음 봉 시가로 반영한 값.
     <span class="tag mdl m-dip">급락</span> E·F 는 1시간 −2% 급락 중 BTC·코인 50일선 위 · 공포탐욕 ≥ 50 · 펀딩 3일 ≥ 0.01% 인 것만 −1% 지정가(12시간) → 24시간 보유. 4시간마다 확인할 때 직전 1시간봉·5분봉으로 그 시각에 했던 것처럼 계산 (처음부터 제때 방식). F 의 TSB7 은 A 와 같은 규칙.
+    <span class="tag mdl m-low">저점</span> G 는 4시간봉 마감마다 저점 반등 점수(그 전 해까지 BTC·ETH 로 학습한 그해 모델의 상위 2%)가 나오면 다음 봉 시가에 1/8 → 3일 뒤 매도. BTC 필터가 꺼지면 사지 않고 보유분도 팜. 메이저 8 · 제때 방식.
     <span class="tag mdl m-bench">기준</span> BH·BF 는 비교용 기준선 (예전 H·F).</p>
-    <p class="note"><b>정상 범위</b> = 2019년부터 아무 날에 시작했다고 치고, 지금과 같은 날수가 지났을 때의 수익률. 옅은 띠 = 가운데 80%, 진한 띠 = 가운데 50%, 점 = 지금. 띠 밖이면 '평소와 다름'. F 는 A 범위로 대신하고 E 는 계산하지 않음.</p>
+    <p class="note"><b>정상 범위</b> = 2019년부터 아무 날에 시작했다고 치고, 지금과 같은 날수가 지났을 때의 수익률. 옅은 띠 = 가운데 80%, 진한 띠 = 가운데 50%, 점 = 지금. 띠 밖이면 '평소와 다름'. F 는 A 범위로 대신하고 E 는 계산하지 않음. G 는 2021년부터.</p>
     <p class="note"><b>TSB7 대기</b> = 다음 4시간봉이 20일 고점 위에서 마감하고 그 봉 거래대금이 20일 평균의 1.5배를 넘으면 매수. 막대는 가까울수록 차요. BTC 필터가 꺼져 있으면 돌파해도 사지 않아요.</p></details>${waitBoard(BOT.watch)}`;
 }
 function bandCell(r) {
@@ -1484,7 +1485,7 @@ function waitBoard(W) {
     const sub = h ? `<div class="wsub"><span class="tag sm acc">${h.accts.join('·')} 보유</span><span class="num ${cls(h.ret)}">${fpct(h.ret, 1)}</span><span class="mute">청산선 <span class="num">${fpct(c.exit_gap, 1)}</span></span>${h.left_days != null ? `<span class="mute"><span class="num">${h.left_days.toFixed(1)}</span>일 남음</span>` : ''}</div>` : '';
     return `<div class="wrow${h ? ' held' : ''}"><b>${esc(c.coin)}</b><div class="wtrack" title="20일 고점 ${fpx(c.line)} · 지금 ${fpx(c.px)}"><i style="width:${(fill * 100).toFixed(0)}%"${near ? ' class="near"' : ''}></i></div>${dist}${vr}${sub}</div>`;
   };
-  const dips = hold.filter((h) => h.strat === '급락');
+  const dips = hold.filter((h) => h.strat === '급락'), lows = hold.filter((h) => h.strat === '저점');
   return `<section class="wait${b.on ? '' : ' off'}">
     <h3>TSB7 대기 <small class="mute">${esc(String(W.bar || '').replace(/^\d{4}-/, ''))} 봉</small></h3>
     <div class="wbtc"><b>BTC 50일선</b><span class="tag sm ${b.on ? 'up' : 'dn'}">${b.on ? '켜짐' : '꺼짐'}</span>${days ? `<span class="mute">${days}일째</span>` : ''}
@@ -1493,6 +1494,7 @@ function waitBoard(W) {
     <div class="whead"><span></span><span>20일 고점까지</span><span>거래대금</span></div>
     <div class="wlist">${rows.map(row).join('')}</div>
     ${dips.length ? `<div class="wsub" style="margin-top:6px"><span class="tag mdl m-dip">급락</span>${dips.map((h) => `<span>${esc(h.coin)} <span class="num ${cls(h.ret)}">${fpct(h.ret, 1)}</span> <span class="mute">${h.accts.join('·')}</span></span>`).join('')}</div>` : ''}
+    ${lows.length ? `<div class="wsub" style="margin-top:6px"><span class="tag mdl m-low">저점</span>${lows.map((h) => `<span>${esc(h.coin)} <span class="num ${cls(h.ret)}">${fpct(h.ret, 1)}</span>${h.left_days != null ? ` <span class="mute"><span class="num">${h.left_days.toFixed(1)}</span>일 남음</span>` : ''}</span>`).join('')}</div>` : ''}
   </section>`;
 }
 function botStamp() {      // 모든 계좌가 같은 시각에 함께 갱신되므로 표 대신 제목 옆에 한 번만
@@ -1742,8 +1744,8 @@ async function pagePerf(el) {
     { k: 'me', name: '나', sub: '재량 · 바이낸스 USDT' + ((ME.resets || []).length ? ` · 자금 리셋 ${ME.resets.length}회 (+${fmoney(ME.resets.reduce((a, r) => a + r.add, 0))})` : ''), r: ret(me), spot: me ? (me.eq.spot - E.deposited(ME, 'spot')) / (ME.init.spot ?? 1e4) : null, fut: me ? (me.eq.fut - E.deposited(ME, 'fut')) / ME.init.usdt : null, dd: me ? mdd(ddPts(me.pts)) : null, n: sm.n, win: sm.win, R: sm.expR, since: ME.created, pts: me?.pts, base: me?.init, color: cssv('--accent') },
     { k: 'cl', name: 'Claude', sub: '재량 · 하루 2번 판단', r: ret(cl), spot: cl ? (cl.eq.spot - E.deposited(CL, 'spot')) / CL.init.spot : null, fut: cl ? (cl.eq.fut - E.deposited(CL, 'fut')) / CL.init.usdt : null, dd: cl ? mdd(ddPts(cl.pts)) : null, n: sc?.n, win: sc?.win, R: sc?.expR, since: CL?.created, pts: cl?.pts, base: cl?.init, color: '#7c6bd6' },
   ];
-  const BC = { A: cssv('--ok'), B: '#2a9d8f', E: '#b0476f', F: '#c77d1a', BH: cssv('--mute') };
-  for (const b of (BOT?.rows || []).filter((r) => ['A', 'B', 'C', 'D', 'E', 'F', 'BH'].includes(r.a))) {
+  const BC = { A: cssv('--ok'), B: '#2a9d8f', E: '#b0476f', F: '#c77d1a', G: cssv('--low'), BH: cssv('--mute') };
+  for (const b of (BOT?.rows || []).filter((r) => ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'BH'].includes(r.a))) {
     const v = b.pts.map((p) => p.v), base = 1e7;
     rows.push({ k: b.a, bot: true, name: BOT_BENCH.has(b.a) ? `기준 ${b.a}` : `봇 ${b.a}`, sub: NAME[b.a], lab: botLabel(b.a), r: +b.last.ret, spot: null, fut: null, dd: mdd([base, ...v]), n: b.n, win: b.win, R: null, since: b.pts[0]?.t, pts: [{ t: b.pts[0]?.t, v: base }, ...b.pts], base, color: BC[b.a] || null });
   }
