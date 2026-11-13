@@ -1994,7 +1994,10 @@ const LAB_ORDER = ['run', 'keep', 'hold', 'no'];
 function pageLab(el) {
   if (!LAB) { el.innerHTML = '<div class="pg"><div class="empty">불러오는 중…</div></div>'; return; }
   const q = (ui.labQ || '').trim().toLowerCase(), f = ui.labV || 'all';
-  const hit = (x) => !q || [x.name, x.why, x.cat].some((t) => String(t).toLowerCase().includes(q));
+  const hit = (x) => !q || [x.name, x.why, x.cat, x.how, x.rule].some((t) => t && String(t).toLowerCase().includes(q));
+  const body = (x) => (x.how || x.rule)
+    ? `${x.how ? `<p class="lr"><em>전략</em><span>${esc(x.how)}</span></p>` : ''}${x.rule ? `<p class="lr"><em>조건</em><span>${esc(x.rule)}</span></p>` : ''}<p class="lr"><em>결과</em><span>${esc(x.why)}</span></p>`
+    : `<p>${esc(x.why)}</p>`;
   const items = LAB.items.filter(hit);
   const cnt = (v) => items.filter((x) => x.v === v).length;
   const seg = [['all', '전체', items.length], ...LAB_ORDER.map((v) => [v, LAB.verdicts[v], cnt(v)])]
@@ -2002,7 +2005,7 @@ function pageLab(el) {
   const sec = (v) => {
     const xs = items.filter((x) => x.v === v);
     if (!xs.length || (f !== 'all' && f !== v)) return '';
-    return `<section class="labsec lv-${v}"><h3>${LAB.verdicts[v]}</h3><ul>${xs.map((x) => `<li><span class="tag sm">${esc(x.cat)}</span><div><b>${esc(x.name)}</b><p>${esc(x.why)}</p></div><time class="num mute">${esc(String(x.date).slice(5))}</time></li>`).join('')}</ul></section>`;
+    return `<section class="labsec lv-${v}"><h3>${LAB.verdicts[v]}</h3><ul>${xs.map((x) => `<li><span class="tag sm">${esc(x.cat)}</span><div><b>${esc(x.name)}</b>${body(x)}</div><time class="num mute">${esc(String(x.date).slice(5))}</time></li>`).join('')}</ul></section>`;
   };
   el.innerHTML = `<div class="pg"><h2 class="pt">검증 지도 <small>${LAB.items.length}개 · ${esc(LAB.updated)}</small></h2>
     <div class="labbar"><input id="labQ" type="search" placeholder="찾기 — 예: 엘리어트, RSI, 숏" value="${esc(ui.labQ || '')}"><div class="seg">${seg}</div></div>
