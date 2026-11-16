@@ -593,22 +593,22 @@ function supertrendA(H, L, C, n = 10, m = 3) {
 // 위 칸(가격 위에 겹침) 지표
 const SHORT = { bb: 'BB 20·2', don: '돈치안 20', kc: '켈트너 20', ichi: '일목', psar: 'SAR', st: '슈퍼트렌드', vwap: 'VWAP' };
 const OVER = {
-  sma: { name: '단순 이동평균', group: '이동평균', param: 'len', def: '20,60', calc: (B, p) => String(p || '20').split(/[,\s]+/).map(Number).filter((n) => n > 1 && n <= 400).slice(0, 5).map((n, j) => ({ label: `SMA ${n}`, data: smaA(B.C, n), color: MA_PAL()[j], w: 2, last: true })) },
-  ema: { name: '지수 이동평균', group: '이동평균', param: 'len', def: '12,26', calc: (B, p) => String(p || '20').split(/[,\s]+/).map(Number).filter((n) => n > 1 && n <= 400).slice(0, 5).map((n, j) => ({ label: `EMA ${n}`, data: ema(B.C, n), color: EMA_PAL()[j], w: 2, last: true })) },
-  bb: { name: '볼린저 밴드 20·2', group: '밴드·추세', calc: (B) => { const m = smaA(B.C, 20), s = stdA(B.C, 20, m), c = TC('#9aa7ff', '#4c5fd5'); return [{ label: 'BB 중심', data: m, color: withA(c, 0.6), w: 1 }, { label: 'BB 위', data: m.map((v, i) => v == null ? null : v + 2 * s[i]), color: c, w: 2 }, { label: 'BB 아래', data: m.map((v, i) => v == null ? null : v - 2 * s[i]), color: c, w: 2 }]; } },
-  don: { name: '돈치안 채널 20 (n봉 최고·최저)', group: '밴드·추세', calc: (B) => { const c = TC('#2ec4b6', '#0b7285'); return [{ label: '돈치안 위', data: hhA(B.H, 20), color: c, w: 2 }, { label: '돈치안 아래', data: llA(B.L, 20), color: c, w: 2 }]; } },
-  kc: { name: '켈트너 채널 20·2', group: '밴드·추세', calc: (B) => { const m = ema(B.C, 20), a = rma(trA(B.H, B.L, B.C), 10), c = TC('#f4a261', '#d9480f'); return [{ label: 'KC 위', data: m.map((v, i) => v == null || a[i] == null ? null : v + 2 * a[i]), color: c, w: 2 }, { label: 'KC 아래', data: m.map((v, i) => v == null || a[i] == null ? null : v - 2 * a[i]), color: c, w: 2 }]; } },
+  sma: { name: '단순 이동평균', group: '이동평균', param: 'len', def: '20,60', calc: (B, p) => String(p || '20').split(/[,\s]+/).map(Number).filter((n) => n > 1 && n <= 400).slice(0, 5).map((n, j) => ({ label: `SMA ${n}`, data: smaA(B.C, n), color: MA_PAL()[j], w: 1.5, last: true })) },
+  ema: { name: '지수 이동평균', group: '이동평균', param: 'len', def: '12,26', calc: (B, p) => String(p || '20').split(/[,\s]+/).map(Number).filter((n) => n > 1 && n <= 400).slice(0, 5).map((n, j) => ({ label: `EMA ${n}`, data: ema(B.C, n), color: EMA_PAL()[j], w: 1.5, last: true })) },
+  bb: { name: '볼린저 밴드 20·2', group: '밴드·추세', calc: (B) => { const m = smaA(B.C, 20), s = stdA(B.C, 20, m), c = TC('#9aa7ff', '#4c5fd5'); return [{ label: 'BB 중심', data: m, color: withA(c, 0.6), w: 1 }, { label: 'BB 위', data: m.map((v, i) => v == null ? null : v + 2 * s[i]), color: c, w: 1.5 }, { label: 'BB 아래', data: m.map((v, i) => v == null ? null : v - 2 * s[i]), color: c, w: 1.5 }]; } },
+  don: { name: '돈치안 채널 20 (n봉 최고·최저)', group: '밴드·추세', calc: (B) => { const c = TC('#2ec4b6', '#0b7285'); return [{ label: '돈치안 위', data: hhA(B.H, 20), color: c, w: 1.5 }, { label: '돈치안 아래', data: llA(B.L, 20), color: c, w: 1.5 }]; } },
+  kc: { name: '켈트너 채널 20·2', group: '밴드·추세', calc: (B) => { const m = ema(B.C, 20), a = rma(trA(B.H, B.L, B.C), 10), c = TC('#f4a261', '#d9480f'); return [{ label: 'KC 위', data: m.map((v, i) => v == null || a[i] == null ? null : v + 2 * a[i]), color: c, w: 1.5 }, { label: 'KC 아래', data: m.map((v, i) => v == null || a[i] == null ? null : v - 2 * a[i]), color: c, w: 1.5 }]; } },
   ichi: { name: '일목균형표 9·26·52', group: '밴드·추세', calc: (B) => {
     const mid = (n) => hhA(B.H, n).map((h, i) => h == null ? null : (h + llA(B.L, n)[i]) / 2);
     const t9 = mid(9), k26 = mid(26), s52 = mid(52), sh = 26;
     const fwd = (arr) => { const o = new Array(arr.length + sh).fill(null); arr.forEach((v, i) => { o[i + sh] = v; }); return o; };
-    return [{ label: '전환선', data: t9, color: TC('#ff8fa3', '#d6336c'), w: 2 }, { label: '기준선', data: k26, color: TC('#a0c4ff', '#1c7ed6'), w: 2 },
+    return [{ label: '전환선', data: t9, color: TC('#ff8fa3', '#d6336c'), w: 1.5 }, { label: '기준선', data: k26, color: TC('#a0c4ff', '#1c7ed6'), w: 1.5 },
       { label: '선행A', data: fwd(t9.map((v, i) => v == null || k26[i] == null ? null : (v + k26[i]) / 2)), color: TC('#80ed99', '#2b8a3e'), w: 1, future: true },
       { label: '선행B', data: fwd(s52), color: TC('#ffd166', '#c98a00'), w: 1, future: true }];
   } },
   psar: { name: '파라볼릭 SAR', group: '밴드·추세', calc: (B) => [{ label: 'SAR', data: psarA(B.H, B.L), color: '--accent', dots: true }] },
-  st: { name: '슈퍼트렌드 10·3', group: '밴드·추세', calc: (B) => { const r = supertrendA(B.H, B.L, B.C); return [{ label: '슈퍼트렌드', data: r.v, w: 2, colors: r.dir.map((d) => d === 1 ? '--up' : '--dn') }]; } },
-  vwap: { name: 'VWAP (하루마다 새로)', group: '거래량', calc: (B) => { let pv = 0, v = 0, day = null; return [{ label: 'VWAP', color: TC('#d0a6ff', '#7048e8'), w: 2, data: B.C.map((c, i) => { const d = Math.floor(B.T[i] / 86400); if (d !== day) { day = d; pv = 0; v = 0; } const tp = (B.H[i] + B.L[i] + c) / 3; pv += B.V[i]; v += B.V[i] / tp; return v ? pv / v : null; }) }]; } },
+  st: { name: '슈퍼트렌드 10·3', group: '밴드·추세', calc: (B) => { const r = supertrendA(B.H, B.L, B.C); return [{ label: '슈퍼트렌드', data: r.v, w: 1.5, colors: r.dir.map((d) => d === 1 ? '--up' : '--dn') }]; } },
+  vwap: { name: 'VWAP (하루마다 새로)', group: '거래량', calc: (B) => { let pv = 0, v = 0, day = null; return [{ label: 'VWAP', color: TC('#d0a6ff', '#7048e8'), w: 1.5, data: B.C.map((c, i) => { const d = Math.floor(B.T[i] / 86400); if (d !== day) { day = d; pv = 0; v = 0; } const tp = (B.H[i] + B.L[i] + c) / 3; pv += B.V[i]; v += B.V[i] / tp; return v ? pv / v : null; }) }]; } },
   vol: { name: '거래량 막대 (아래에 겹침)', group: '거래량', special: true },
 };
 // 아래 칸(따로 축) 지표 — 여러 개 가능 (최대 4)
@@ -630,7 +630,7 @@ const SUB = {
     }
     return [{ label: '장기', data: lt, hist: true, hcolors: lt.map((_, i) => shade(lt, i, 0.30, 0.16)) },
       { label: '단기', data: st, hist: true, hcolors: st.map((_, i) => shade(st, i, 0.95, 0.5)), last: true, title: '단기' },
-      { label: '신호선', data: sig, color: TC('#e4e7eb', '#141820'), w: 3, pcolors: sigC, marks, last: true, title: 'T3' }];
+      { label: '신호선', data: sig, color: TC('#e4e7eb', '#141820'), w: 2, pcolors: sigC, marks, last: true, title: 'T3' }];
   } },
   rsi: { name: 'RSI 14', levels: [70, 30], calc: (B) => [{ label: 'RSI', data: rsi(B.C, 14) }] },
   macd: { name: 'MACD 12·26·9', calc: (B) => { const a = ema(B.C, 12), b = ema(B.C, 26), m = a.map((v, i) => v == null || b[i] == null ? null : v - b[i]), s = ema(m, 9); return [{ label: 'MACD', data: m }, { label: '시그널', data: s, color: '--mute' }, { label: '히스토그램', data: m.map((v, i) => v == null || s[i] == null ? null : v - s[i]), hist: true }]; } },
@@ -787,7 +787,7 @@ function mountChart(keepPop) {
     const specs = d.calc({ C: [], H: [], L: [], V: [], T: [] }, I[k]);
     for (const sp of specs) {
       const col = sp.color ? colOf(sp.color) : PAL[pi++ % PAL.length];
-      const ser = chart.addSeries(LC.LineSeries, { color: col, lineWidth: sp.w || 2, lineStyle: sp.dash || 0, lineVisible: !sp.dots, pointMarkersVisible: !!sp.dots, pointMarkersRadius: 2.5, priceLineVisible: false, lastValueVisible: !!sp.last, crosshairMarkerVisible: false, autoscaleInfoProvider: sp.future ? () => null : undefined });
+      const ser = chart.addSeries(LC.LineSeries, { color: col, lineWidth: sp.w || 1.5, lineStyle: sp.dash || 0, lineVisible: !sp.dots, pointMarkersVisible: !!sp.dots, pointMarkersRadius: 2.5, priceLineVisible: false, lastValueVisible: !!sp.last, crosshairMarkerVisible: false, autoscaleInfoProvider: sp.future ? () => null : undefined });
       mc.over.push({ k, label: sp.label, ser, color: col });
     }
   }
@@ -798,7 +798,7 @@ function mountChart(keepPop) {
     const sers = specs.map((sp, q) => {
       const col = sp.color ? colOf(sp.color) : q === 0 ? cssv('--accent') : PAL[(q + 1) % PAL.length];
       const ser = sp.hist ? chart.addSeries(LC.HistogramSeries, { priceLineVisible: false, lastValueVisible: !!sp.last, title: sp.title || '' }, pane)
-        : chart.addSeries(LC.LineSeries, { color: col, lineWidth: sp.w || (q === 0 ? 2 : 1), priceLineVisible: false, lastValueVisible: sp.last ?? q === 0, crosshairMarkerVisible: false, title: sp.title || '' }, pane);
+        : chart.addSeries(LC.LineSeries, { color: col, lineWidth: sp.w || (q === 0 ? 1.5 : 1), priceLineVisible: false, lastValueVisible: sp.last ?? q === 0, crosshairMarkerVisible: false, title: sp.title || '' }, pane);
       mks[q] = sp.marks ? LC.createSeriesMarkers(ser, []) : null;
       return ser;
     });
